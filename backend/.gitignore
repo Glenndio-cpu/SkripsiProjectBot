@@ -1,5 +1,60 @@
-.venv/
-__pycache__/
-app/__pycache__/
-app/routes/__pycache__/
+# Environment
 .env
+.env.local
+.env.*.local
+.env.bak
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# Python artifacts
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Logs and local databases
+*.log
+*.logs
+*.db
+*.sqlite
+*.sqlite3
+*.rdb
+
+# OS and editor
+.DS_Store
+.DS_Store?
+._*
+ehthumbs.db
+Thumbs.db
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
