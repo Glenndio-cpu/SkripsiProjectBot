@@ -8,6 +8,7 @@ from flask import Blueprint, request, jsonify
 from app.db import query, execute
 from app.session_auth import get_authenticated_user
 from app.role_guard import require_roles
+from app.roles import ROLE_ADMIN, ROLE_HEAD
 
 fonnte_bp = Blueprint('fonnte', __name__)
 
@@ -25,7 +26,7 @@ def _fonnte_headers():
 #  GET /api/fonnte/status  -- Check Fonnte device status
 # ===========================================================
 @fonnte_bp.route('/status', methods=['GET'])
-@require_roles('nurse')
+@require_roles(ROLE_ADMIN, ROLE_HEAD)
 def fonnte_status():
     token = _get_token()
     if not token:
@@ -70,7 +71,7 @@ def fonnte_status():
 #  POST /api/fonnte/send  -- Send single/multiple WhatsApp
 # ===========================================================
 @fonnte_bp.route('/send', methods=['POST'])
-@require_roles('nurse')
+@require_roles(ROLE_ADMIN)
 def fonnte_send():
     body = request.get_json(force=True)
     admin = get_authenticated_user()
@@ -149,7 +150,7 @@ def fonnte_send():
 #  POST /api/fonnte/broadcast  -- Broadcast to all patients
 # ===========================================================
 @fonnte_bp.route('/broadcast', methods=['POST'])
-@require_roles('nurse')
+@require_roles(ROLE_HEAD, ROLE_ADMIN)
 def fonnte_broadcast():
     body = request.get_json(force=True)
     admin = get_authenticated_user()
@@ -242,7 +243,7 @@ def fonnte_broadcast():
 #  POST /api/fonnte/validate  -- Validate WhatsApp number
 # ===========================================================
 @fonnte_bp.route('/validate', methods=['POST'])
-@require_roles('nurse')
+@require_roles(ROLE_ADMIN)
 def fonnte_validate():
     body = request.get_json(force=True)
     token = _get_token()
@@ -277,7 +278,7 @@ def fonnte_validate():
 #  GET /api/fonnte/logs  -- Broadcast history logs
 # ===========================================================
 @fonnte_bp.route('/logs', methods=['GET'])
-@require_roles('nurse')
+@require_roles(ROLE_ADMIN, ROLE_HEAD)
 def fonnte_logs():
     limit = request.args.get('limit', 50, type=int)
     rows = query(
@@ -297,7 +298,7 @@ def fonnte_logs():
 #  POST /api/fonnte/send-individual  -- Send to one person
 # ===========================================================
 @fonnte_bp.route('/send-individual', methods=['POST'])
-@require_roles('nurse')
+@require_roles(ROLE_ADMIN)
 def fonnte_send_individual():
     """Send to a single contact by phone number."""
     body = request.get_json(force=True)

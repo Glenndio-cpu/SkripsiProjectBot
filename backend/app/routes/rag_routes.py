@@ -7,6 +7,7 @@ from flask import Blueprint, request, jsonify
 from werkzeug.utils import secure_filename
 
 from app.role_guard import require_roles
+from app.roles import ROLE_ADMIN
 
 rag_bp = Blueprint('rag', __name__)
 
@@ -15,9 +16,106 @@ ALLOWED_EXT = {'.txt', '.pdf', '.json', '.md', '.csv', '.docx'}
 MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 
 
+def _get_qdrant_source_counts() -> dict:
+    """Return source -> chunk count from Qdrant payload metadata."""
+    try:
+        from app.rag import _get_client, COLLECTION_NAME
+
+        client = _get_client()
+        source_counts = {}
+        offset = None
+
+        # Safety bound to avoid infinite pagination loops.
+        for _ in range(200):
+            scroll_resp = client.scroll(
+                collection_name=COLLECTION_NAME,
+                limit=256,
+                offset=offset,
+                with_payload=['source'],
+                with_vectors=False,
+            )
+
+            if isinstance(scroll_resp, tuple):
+                points, offset = scroll_resp
+            else:
+                points = getattr(scroll_resp, 'points', []) or []
+                offset = getattr(scroll_resp, 'next_page_offset', None)
+
+            if not points:
+                break
+
+            for point in points:
+                payload = getattr(point, 'payload', None) or {}
+                source = payload.get('source')
+                if source:
+                    source_counts[source] = source_counts.get(source, 0) + 1
+
+            if offset is None:
+                break
+
+        return source_counts
+    except Exception:
+        return {}
+
+
+def _delete_qdrant_points_by_source(source_name: str) -> int:
+    """Delete points by payload source without relying on payload index."""
+    if not source_name:
+        return 0
+
+    from app.rag import _get_client, COLLECTION_NAME
+    from qdrant_client.models import PointIdsList
+
+    client = _get_client()
+    matched_ids = []
+    offset = None
+
+    # Scroll all points and match source in payload (works without payload index)
+    for _ in range(400):
+        scroll_resp = client.scroll(
+            collection_name=COLLECTION_NAME,
+            limit=256,
+            offset=offset,
+            with_payload=['source'],
+            with_vectors=False,
+        )
+
+        if isinstance(scroll_resp, tuple):
+            points, offset = scroll_resp
+        else:
+            points = getattr(scroll_resp, 'points', []) or []
+            offset = getattr(scroll_resp, 'next_page_offset', None)
+
+        if not points:
+            break
+
+        for point in points:
+            payload = getattr(point, 'payload', None) or {}
+            if payload.get('source') == source_name:
+                matched_ids.append(point.id)
+
+        if offset is None:
+            break
+
+    if not matched_ids:
+        return 0
+
+    deleted = 0
+    for i in range(0, len(matched_ids), 256):
+        batch_ids = matched_ids[i:i + 256]
+        client.delete(
+            collection_name=COLLECTION_NAME,
+            points_selector=PointIdsList(points=batch_ids),
+        )
+        deleted += len(batch_ids)
+
+    return deleted
+
+
 # ── GET /api/rag/status ──────────────────────────────────────────────────
 
 @rag_bp.route('/status', methods=['GET'])
+@require_roles(ROLE_ADMIN)
 def rag_status():
     try:
         from app.rag import get_rag_status
@@ -30,7 +128,7 @@ def rag_status():
 # ── POST /api/rag/upload ─────────────────────────────────────────────────
 
 @rag_bp.route('/upload', methods=['POST'])
-@require_roles('nurse')
+@require_roles(ROLE_ADMIN)
 def upload_document():
     if 'file' not in request.files:
         return jsonify(error='File tidak ditemukan'), 400
@@ -75,35 +173,44 @@ def upload_document():
 # ── DELETE /api/rag/document/<filename> ───────────────────────────────────
 
 @rag_bp.route('/document/<filename>', methods=['DELETE'])
-@require_roles('nurse')
+@require_roles(ROLE_ADMIN)
 def delete_document(filename):
     filepath = DOCS_DIR / secure_filename(filename)
-    if not filepath.exists():
-        return jsonify(error='File tidak ditemukan'), 404
-
-    filepath.unlink()
+    file_deleted = False
+    if filepath.exists():
+        filepath.unlink()
+        file_deleted = True
 
     # Remove from Qdrant
+    qdrant_deleted = False
+    qdrant_deleted_points = 0
     try:
-        from qdrant_client.models import Filter, FieldCondition, MatchValue
-        from app.rag import _get_client, COLLECTION_NAME
-        client = _get_client()
-        client.delete(
-            collection_name=COLLECTION_NAME,
-            points_selector=Filter(
-                must=[FieldCondition(key='source', match=MatchValue(value=filename))]
-            ),
-        )
+        source_candidates = {filename, secure_filename(filename)}
+        for source in source_candidates:
+            if not source:
+                continue
+            qdrant_deleted_points += _delete_qdrant_points_by_source(source)
+        qdrant_deleted = qdrant_deleted_points > 0
     except Exception:
         pass
 
-    return jsonify(message=f'Dokumen "{filename}" berhasil dihapus')
+    if not file_deleted and not qdrant_deleted:
+        return jsonify(error='Dokumen tidak ditemukan di file lokal maupun index Qdrant'), 404
+
+    if file_deleted and qdrant_deleted:
+        message = f'Dokumen "{filename}" berhasil dihapus dari file lokal dan index Qdrant ({qdrant_deleted_points} chunk)'
+    elif file_deleted:
+        message = f'Dokumen "{filename}" berhasil dihapus dari file lokal'
+    else:
+        message = f'Dokumen "{filename}" berhasil dihapus dari index Qdrant ({qdrant_deleted_points} chunk)'
+
+    return jsonify(message=message)
 
 
 # ── POST /api/rag/reindex ────────────────────────────────────────────────
 
 @rag_bp.route('/reindex', methods=['POST'])
-@require_roles('nurse')
+@require_roles(ROLE_ADMIN)
 def reindex():
     try:
         from app.rag import index_all_documents
@@ -122,6 +229,7 @@ def reindex():
 # ── POST /api/rag/query (test retrieval) ─────────────────────────────────
 
 @rag_bp.route('/query', methods=['POST'])
+@require_roles(ROLE_ADMIN)
 def query_rag():
     body = request.get_json(silent=True) or {}
     q = body.get('query', '').strip()
@@ -141,23 +249,59 @@ def query_rag():
 # ── GET /api/rag/documents ───────────────────────────────────────────────
 
 @rag_bp.route('/documents', methods=['GET'])
+@require_roles(ROLE_ADMIN)
 def list_documents():
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
-    docs = []
+    docs_by_name = {}
+
+    # Filesystem documents
     for f in sorted(DOCS_DIR.iterdir()):
         if f.suffix.lower() in ALLOWED_EXT and f.is_file():
-            docs.append({
+            size = f.stat().st_size
+            docs_by_name[f.name] = {
                 'name': f.name,
-                'size': f.stat().st_size,
+                'size': size,
+                'sizeFormatted': _format_size(size),
                 'extension': f.suffix.lower(),
-            })
-    return jsonify(documents=docs, count=len(docs))
+                'lastModified': datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
+                'origin': 'filesystem',
+                'indexedInQdrant': False,
+                'qdrantChunks': 0,
+            }
+
+    # Qdrant-only documents
+    source_counts = _get_qdrant_source_counts()
+    for source, chunk_count in source_counts.items():
+        if source in docs_by_name:
+            docs_by_name[source]['indexedInQdrant'] = True
+            docs_by_name[source]['qdrantChunks'] = chunk_count
+            continue
+
+        docs_by_name[source] = {
+            'name': source,
+            'size': None,
+            'sizeFormatted': '-',
+            'extension': Path(source).suffix.lower() or '-',
+            'lastModified': None,
+            'origin': 'qdrant',
+            'indexedInQdrant': True,
+            'qdrantChunks': chunk_count,
+        }
+
+    docs = sorted(docs_by_name.values(), key=lambda d: (d.get('name') or '').lower())
+
+    return jsonify(
+        documents=docs,
+        count=len(docs),
+        localCount=sum(1 for d in docs if d.get('origin') == 'filesystem'),
+        qdrantIndexedCount=sum(1 for d in docs if d.get('indexedInQdrant')),
+    )
 
 
 # ── GET /api/rag/system-info (admin) ──────────────────────────────────────
 
 @rag_bp.route('/system-info', methods=['GET'])
-@require_roles('nurse')
+@require_roles(ROLE_ADMIN)
 def system_info():
     """Return comprehensive info about Vector DB, Embedding model, and LLM."""
     info = {
@@ -317,19 +461,52 @@ def _get_rag_pipeline_info() -> dict:
 
     supported = {'.txt', '.pdf', '.json', '.md', '.csv', '.docx'}
     DOCS_DIR.mkdir(parents=True, exist_ok=True)
-    doc_files = []
+    docs_by_name = {}
     total_size = 0
+
+    # Filesystem documents
     for f in sorted(DOCS_DIR.iterdir()):
         if f.suffix.lower() in supported and f.is_file():
             size = f.stat().st_size
-            doc_files.append({
+            docs_by_name[f.name] = {
                 'name': f.name,
                 'size': size,
                 'sizeFormatted': _format_size(size),
                 'extension': f.suffix.lower(),
                 'lastModified': datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
-            })
+                'origin': 'filesystem',
+                'indexedInQdrant': False,
+                'qdrantChunks': 0,
+            }
             total_size += size
+
+    # Merge with Qdrant sources so management can show indexed docs
+    source_counts = _get_qdrant_source_counts()
+    for source, chunk_count in source_counts.items():
+        if source in docs_by_name:
+            docs_by_name[source]['indexedInQdrant'] = True
+            docs_by_name[source]['qdrantChunks'] = chunk_count
+            continue
+
+        docs_by_name[source] = {
+            'name': source,
+            'size': None,
+            'sizeFormatted': '-',
+            'extension': Path(source).suffix.lower() or '-',
+            'lastModified': None,
+            'origin': 'qdrant',
+            'indexedInQdrant': True,
+            'qdrantChunks': chunk_count,
+        }
+
+    doc_files = sorted(docs_by_name.values(), key=lambda d: (d.get('name') or '').lower())
+
+    if total_size > 0:
+        total_documents_size = _format_size(total_size)
+    elif doc_files:
+        total_documents_size = 'N/A'
+    else:
+        total_documents_size = '0 B'
 
     return {
         'pipeline': 'RAG (Retrieval Augmented Generation)',
@@ -348,7 +525,7 @@ def _get_rag_pipeline_info() -> dict:
         'topK': TOP_K,
         'minScore': 0.25,
         'totalDocuments': len(doc_files),
-        'totalDocumentsSize': _format_size(total_size),
+        'totalDocumentsSize': total_documents_size,
         'documents': doc_files,
         'supportedFormats': sorted(supported),
         'maxFileSize': '10 MB',
