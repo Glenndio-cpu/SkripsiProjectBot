@@ -3,8 +3,19 @@ import { useNavigate, Link } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
 import ImageCropModal from '../components/ImageCropModal';
 import api from '../lib/api';
-import { AlertTriangle, Camera, Phone, Mail, X, Trash2, Lock, User, Activity, BookOpen, CalendarDays, BarChart3, Users, Megaphone, UserPlus, Bell } from 'lucide-react';
+import type { PatientNotification } from '../lib/api';
+import { AlertTriangle, Camera, Phone, Mail, X, Trash2, Lock, User, Activity, CalendarDays, BarChart3, Users, Megaphone, UserPlus, Bell } from 'lucide-react';
 import { getUserStats } from '../lib/userActivityTracking';
+import { isAdminRole, isStaffRole, roleLabel } from '../lib/roles';
+
+function isWhatsappReady(phone?: string): boolean {
+  if (!phone) return false;
+
+  const clean = phone.replace(/[\s\-\(\)]/g, '').replace(/^\+/, '');
+  if (!/^\d{10,15}$/.test(clean)) return false;
+
+  return clean.startsWith('62') || clean.startsWith('08') || clean.startsWith('8');
+}
 
 interface UserRecord {
   email?: string;
@@ -29,7 +40,10 @@ const Profile = () => {
   const [profileImage, setProfileImage] = useState<string>('');
   const [isCropModalOpen, setIsCropModalOpen] = useState(false);
   const [tempImageUrl, setTempImageUrl] = useState<string>('');
-  const [userStats, setUserStats] = useState({ consultationCount: 0, articlesReadCount: 0, activeDaysCount: 0 });
+  const [userStats, setUserStats] = useState({ consultationCount: 0, activeDaysCount: 0 });
+  const [patientNotifications, setPatientNotifications] = useState<PatientNotification[]>([]);
+  const [notificationsLoading, setNotificationsLoading] = useState(false);
+  const [unreadNotificationCount, setUnreadNotificationCount] = useState(0);
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
   const [deleteConfirmPassword, setDeleteConfirmPassword] = useState('');
   const [formData, setFormData] = useState({
@@ -50,6 +64,11 @@ const Profile = () => {
     }
 
     const parsedUser = JSON.parse(userData);
+    if (parsedUser.role === 'public') {
+      navigate('/konsultasi');
+      return;
+    }
+
     setUser(parsedUser);
     setProfileImage(parsedUser.profileImage || '');
     setFormData(prev => ({
@@ -60,17 +79,55 @@ const Profile = () => {
       ktp: parsedUser.ktp || ''
     }));
 
-    // Only load stats for patients, not admins
-    if (parsedUser.role !== 'nurse') {
+    // Only load stats for patients, not staff roles
+    if (!isStaffRole(parsedUser.role)) {
       const stats = getUserStats();
       if (stats instanceof Promise) {
         stats.then(s => setUserStats(s));
       } else {
         setUserStats(stats);
       }
+      void loadPatientNotifications();
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const loadPatientNotifications = async () => {
+    setNotificationsLoading(true);
+    try {
+      const data = await api.getPatientNotifications();
+      setPatientNotifications(data.notifications || []);
+      setUnreadNotificationCount(Number(data.unreadCount || 0));
+    } catch (error) {
+      console.error('Load patient notifications error:', error);
+      setPatientNotifications([]);
+      setUnreadNotificationCount(0);
+    } finally {
+      setNotificationsLoading(false);
+    }
+  };
+
+  const handleMarkNotificationRead = async (id: number) => {
+    try {
+      await api.markPatientNotificationRead(id);
+      setPatientNotifications((prev) => prev.map((item) => (
+        item.id === id ? { ...item, isRead: true } : item
+      )));
+      setUnreadNotificationCount((prev) => Math.max(0, prev - 1));
+    } catch (error: any) {
+      alert(error?.message || 'Gagal menandai notifikasi sebagai dibaca');
+    }
+  };
+
+  const handleMarkAllNotificationRead = async () => {
+    try {
+      await api.markAllPatientNotificationsRead();
+      setPatientNotifications((prev) => prev.map((item) => ({ ...item, isRead: true })));
+      setUnreadNotificationCount(0);
+    } catch (error: any) {
+      alert(error?.message || 'Gagal menandai semua notifikasi');
+    }
+  };
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -132,16 +189,19 @@ const Profile = () => {
   const handleSaveProfile = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    if (formData.phone) {
-      const phoneRegex = /^[0-9]{10,15}$/;
-      const cleanPhone = formData.phone.replace(/[\s()-]/g, '');
-      if (!phoneRegex.test(cleanPhone)) {
-        alert('Nomor telepon tidak valid (10-15 digit angka)');
-        return;
-      }
+    const cleanPhone = formData.phone ? formData.phone.replace(/[\s()-]/g, '') : '';
+    const phoneRegex = /^[0-9]{10,15}$/;
+
+    if (!isStaffRole(user?.role) && !cleanPhone) {
+      alert('Nomor WhatsApp pasien wajib diisi untuk menerima broadcast.');
+      return;
     }
 
-    const cleanPhone = formData.phone ? formData.phone.replace(/[\s()-]/g, '') : '';
+    if (cleanPhone && !phoneRegex.test(cleanPhone)) {
+      alert('Nomor telepon tidak valid (10-15 digit angka)');
+      return;
+    }
+
     const cleanKtp = formData.ktp ? formData.ktp.replace(/\D/g, '') : '';
 
     if (cleanKtp && !/^\d{16}$/.test(cleanKtp)) {
@@ -179,6 +239,11 @@ const Profile = () => {
   };
 
   const handleRemovePhone = async () => {
+    if (!isStaffRole(user?.role)) {
+      alert('Nomor WhatsApp pasien tidak dapat dilepas karena digunakan untuk broadcast informasi.');
+      return;
+    }
+
     if (!window.confirm('Apakah Anda yakin ingin melepas nomor telepon dari akun ini?')) return;
 
     try {
@@ -245,11 +310,11 @@ const Profile = () => {
     return <Layout><p className="text-center py-20 text-slate-400">Loading...</p></Layout>;
   }
 
-  const inputClass = "w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent";
+  const inputClass = "w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent";
+  const whatsappReady = isWhatsappReady(user.phone || formData.phone);
 
   const stats = [
     { icon: Activity, label: 'Konsultasi', value: userStats.consultationCount },
-    { icon: BookOpen, label: 'Artikel Dibaca', value: userStats.articlesReadCount },
     { icon: CalendarDays, label: 'Hari Aktif', value: userStats.activeDaysCount }
   ];
 
@@ -274,13 +339,13 @@ const Profile = () => {
                     className="w-24 h-24 sm:w-28 sm:h-28 rounded-full object-cover border-2 border-slate-100"
                   />
                 ) : (
-                  <div className="w-24 h-24 sm:w-28 sm:h-28 bg-sky-50 rounded-full flex items-center justify-center text-3xl sm:text-4xl font-bold text-sky-500 border-2 border-slate-100">
+                  <div className="w-24 h-24 sm:w-28 sm:h-28 bg-emerald-50 rounded-full flex items-center justify-center text-3xl sm:text-4xl font-bold text-emerald-500 border-2 border-slate-100">
                     {user.name.charAt(0).toUpperCase()}
                   </div>
                 )}
                 <button
                   onClick={() => fileInputRef.current?.click()}
-                  className="absolute bottom-0 right-0 w-8 h-8 bg-sky-500 hover:bg-sky-600 text-white rounded-full flex items-center justify-center transition-colors"
+                  className="absolute bottom-0 right-0 w-8 h-8 bg-emerald-500 hover:bg-emerald-600 text-white rounded-full flex items-center justify-center transition-colors"
                   title="Upload foto"
                 >
                   <Camera className="w-3.5 h-3.5" />
@@ -297,12 +362,11 @@ const Profile = () => {
               {/* User Info */}
               <div className="text-center sm:text-left flex-1 min-w-0">
                 <h2 className="text-xl font-semibold text-slate-700 truncate">{user.name}</h2>
-                <span className={`inline-block mt-1 mb-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full ${
-                  user.role === 'nurse'
+                <span className={`inline-block mt-1 mb-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full ${isStaffRole(user.role)
                     ? 'bg-emerald-100 text-emerald-700'
-                    : 'bg-sky-100 text-sky-700'
-                }`}>
-                  {user.role === 'nurse' ? 'Admin' : 'Pasien'}
+                    : 'bg-emerald-100 text-emerald-700'
+                  }`}>
+                  {roleLabel(user.role)}
                 </span>
                 <div className="flex items-center justify-center sm:justify-start gap-1.5 mt-1">
                   <Mail className="w-3.5 h-3.5 text-slate-400" />
@@ -312,6 +376,14 @@ const Profile = () => {
                   <div className="flex items-center justify-center sm:justify-start gap-1.5 mt-1">
                     <Phone className="w-3.5 h-3.5 text-slate-400" />
                     <p className="text-sm text-slate-500">{user.phone}</p>
+                  </div>
+                )}
+                {!isStaffRole(user.role) && (
+                  <div className="mt-2">
+                    <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-[11px] font-medium ${whatsappReady ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-50 text-amber-700'}`}>
+                      <Bell className="w-3 h-3" />
+                      {whatsappReady ? 'WhatsApp siap menerima broadcast' : 'WhatsApp belum siap menerima broadcast'}
+                    </span>
                   </div>
                 )}
                 {user.ktp && (
@@ -326,7 +398,7 @@ const Profile = () => {
                   <div className="flex items-center justify-center sm:justify-start gap-3 mt-3">
                     <button
                       onClick={() => fileInputRef.current?.click()}
-                      className="text-xs font-medium text-sky-500 hover:text-sky-600 transition-colors"
+                      className="text-xs font-medium text-emerald-500 hover:text-emerald-600 transition-colors"
                     >
                       Ganti Foto
                     </button>
@@ -346,7 +418,7 @@ const Profile = () => {
             {!isEditing ? (
               <button
                 onClick={() => setIsEditing(true)}
-                className="flex items-center gap-2 bg-sky-500 hover:bg-sky-600 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors"
+                className="flex items-center gap-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors"
               >
                 <User className="w-4 h-4" /> Edit Profil
               </button>
@@ -375,7 +447,7 @@ const Profile = () => {
                       className={`flex-1 ${inputClass}`}
                       placeholder="08123456789"
                     />
-                    {formData.phone && (
+                    {isStaffRole(user?.role) && formData.phone && (
                       <button
                         type="button"
                         onClick={handleRemovePhone}
@@ -385,7 +457,11 @@ const Profile = () => {
                       </button>
                     )}
                   </div>
-                  <p className="mt-1 text-xs text-slate-400">{formData.phone ? 'Satu nomor hanya untuk satu akun' : 'Opsional'}</p>
+                  <p className="mt-1 text-xs text-slate-400">
+                    {!isStaffRole(user?.role)
+                      ? 'Wajib diisi untuk menerima broadcast WhatsApp.'
+                      : (formData.phone ? 'Satu nomor hanya untuk satu akun' : 'Opsional')}
+                  </p>
                 </div>
 
                 <div>
@@ -405,7 +481,7 @@ const Profile = () => {
                 </div>
 
                 <div className="flex gap-2.5 pt-1">
-                  <button type="submit" className="bg-sky-500 hover:bg-sky-600 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors">
+                  <button type="submit" className="bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors">
                     Simpan
                   </button>
                   <button type="button" onClick={() => setIsEditing(false)} className="text-sm font-medium text-slate-600 border border-slate-200 px-5 py-2.5 rounded-lg hover:bg-slate-50 transition-colors">
@@ -417,46 +493,124 @@ const Profile = () => {
           </div>
 
           {/* Admin Quick Links */}
-          {user.role === 'nurse' && (
-          <div className="bg-white border border-emerald-100 rounded-xl p-5 sm:p-7 mb-5">
-            <h3 className="text-lg font-semibold text-slate-700 mb-1 flex items-center gap-2">
-              <BarChart3 className="w-4 h-4 text-emerald-500" /> Panel Admin
-            </h3>
-            <p className="text-xs text-slate-400 mb-4">Akses cepat ke fitur administrasi</p>
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-              {[
-                { to: '/admin/dashboard', icon: BarChart3, label: 'Dashboard', color: 'bg-emerald-50 text-emerald-600' },
-                { to: '/admin/patients', icon: Users, label: 'Kelola Pasien', color: 'bg-sky-50 text-sky-600' },
-                { to: '/admin/broadcast', icon: Megaphone, label: 'Broadcast', color: 'bg-amber-50 text-amber-600' },
-                { to: '/admin/announcements', icon: Bell, label: 'Pengumuman', color: 'bg-rose-50 text-rose-600' },
-                { to: '/admin/register', icon: UserPlus, label: 'Tambah Admin', color: 'bg-violet-50 text-violet-600' },
-              ].map((item) => (
-                <Link
-                  key={item.to}
-                  to={item.to}
-                  className={`flex flex-col items-center gap-2 p-4 rounded-xl border border-slate-100 hover:border-slate-200 transition-colors ${item.color}`}
-                >
-                  <item.icon className="w-5 h-5" />
-                  <span className="text-xs font-medium text-center">{item.label}</span>
-                </Link>
-              ))}
+          {isStaffRole(user.role) && (
+            <div className="bg-white border border-emerald-100 rounded-xl p-5 sm:p-7 mb-5">
+              <h3 className="text-lg font-semibold text-slate-700 mb-1 flex items-center gap-2">
+                <BarChart3 className="w-4 h-4 text-emerald-500" /> Panel Admin
+              </h3>
+              <p className="text-xs text-slate-400 mb-4">Akses cepat ke fitur administrasi</p>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                {[
+                  { to: '/admin/dashboard', icon: BarChart3, label: 'Dashboard', color: 'bg-emerald-50 text-emerald-600' },
+                  { to: '/admin/users', icon: Users, label: 'Kelola Pasien', color: 'bg-emerald-50 text-emerald-600' },
+                  { to: '/admin/broadcast', icon: Megaphone, label: 'Broadcast', color: 'bg-amber-50 text-amber-600' },
+                  { to: '/admin/announcements', icon: Bell, label: 'Pengumuman', color: 'bg-rose-50 text-rose-600' },
+                  { to: '/admin/register', icon: UserPlus, label: 'Tambah Staf', color: 'bg-violet-50 text-violet-600', adminOnly: true },
+                ].map((item) => (
+                  ((item as any).adminOnly && !isAdminRole(user.role)) ? null : (
+                    <Link
+                      key={item.to}
+                      to={item.to}
+                      className={`flex flex-col items-center gap-2 p-4 rounded-xl border border-slate-100 hover:border-slate-200 transition-colors ${item.color}`}
+                    >
+                      <item.icon className="w-5 h-5" />
+                      <span className="text-xs font-medium text-center">{item.label}</span>
+                    </Link>
+                  )
+                ))}
+              </div>
             </div>
-          </div>
           )}
 
           {/* Stats – only for patients */}
-          {user.role !== 'nurse' && (
-          <div className="grid grid-cols-3 gap-3 sm:gap-4 mb-5">
-            {stats.map((stat) => (
-              <div key={stat.label} className="bg-white border border-slate-100 rounded-xl p-4 sm:p-5 text-center">
-                <div className="w-9 h-9 rounded-lg bg-sky-50 flex items-center justify-center mx-auto mb-2">
-                  <stat.icon className="w-4 h-4 text-sky-500" />
+          {!isStaffRole(user.role) && (
+            <div className="grid grid-cols-2 gap-3 sm:gap-4 mb-5">
+              {stats.map((stat) => (
+                <div key={stat.label} className="bg-white border border-slate-100 rounded-xl p-4 sm:p-5 text-center">
+                  <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center mx-auto mb-2">
+                    <stat.icon className="w-4 h-4 text-emerald-500" />
+                  </div>
+                  <p className="text-xl sm:text-2xl font-bold text-slate-700">{stat.value}</p>
+                  <p className="text-xs text-slate-400 mt-0.5">{stat.label}</p>
                 </div>
-                <p className="text-xl sm:text-2xl font-bold text-slate-700">{stat.value}</p>
-                <p className="text-xs text-slate-400 mt-0.5">{stat.label}</p>
+              ))}
+            </div>
+          )}
+
+          {/* Patient Info Reception */}
+          {!isStaffRole(user.role) && (
+            <div className="bg-white border border-emerald-100 rounded-xl p-5 sm:p-7 mb-5">
+              <h3 className="text-lg font-semibold text-slate-700 mb-1 flex items-center gap-2">
+                <Bell className="w-4 h-4 text-emerald-500" /> Informasi untuk Pasien
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Sebagai pasien, Anda akan menerima informasi jadwal berobat dan broadcast WhatsApp dari puskesmas.
+              </p>
+              <div className={`mb-4 rounded-lg border px-3 py-2 text-sm ${whatsappReady ? 'bg-emerald-50 border-emerald-200 text-emerald-700' : 'bg-amber-50 border-amber-200 text-amber-700'}`}>
+                Status nomor WhatsApp: <span className="font-semibold">{whatsappReady ? 'Siap menerima broadcast' : 'Belum siap menerima broadcast'}</span>
               </div>
-            ))}
-          </div>
+              <ul className="space-y-2 text-sm text-slate-600">
+                <li>• Informasi jadwal berobat ditampilkan pada banner beranda.</li>
+                <li>• Broadcast WhatsApp dikirim ke nomor telepon pasien yang aktif.</li>
+                <li>• Pastikan nomor telepon Anda terisi agar tidak melewatkan informasi.</li>
+              </ul>
+
+              <div className="mt-5 border-t border-slate-100 pt-4">
+                <div className="flex items-center justify-between gap-2 mb-3">
+                  <p className="text-sm font-semibold text-slate-700">Notifikasi Informasi Kesehatan</p>
+                  <div className="flex items-center gap-2">
+                    <span className={`text-xs font-semibold px-2 py-1 rounded-full ${unreadNotificationCount > 0 ? 'bg-red-50 text-red-600' : 'bg-slate-100 text-slate-500'}`}>
+                      {unreadNotificationCount} belum dibaca
+                    </span>
+                    {unreadNotificationCount > 0 && (
+                      <button
+                        onClick={handleMarkAllNotificationRead}
+                        className="text-xs font-medium text-emerald-600 hover:text-emerald-700"
+                      >
+                        Tandai semua dibaca
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {notificationsLoading ? (
+                  <p className="text-sm text-slate-400">Memuat notifikasi...</p>
+                ) : patientNotifications.length === 0 ? (
+                  <p className="text-sm text-slate-500">Belum ada notifikasi informasi kesehatan.</p>
+                ) : (
+                  <div className="space-y-2">
+                    {patientNotifications.slice(0, 6).map((item) => (
+                      <div
+                        key={item.id}
+                        className={`rounded-lg border px-3 py-2 ${item.isRead ? 'bg-slate-50 border-slate-200' : 'bg-emerald-50 border-emerald-200'}`}
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="min-w-0">
+                            <p className={`text-sm font-semibold ${item.isRead ? 'text-slate-700' : 'text-emerald-700'}`}>{item.title}</p>
+                            <p className="text-sm text-slate-600 mt-0.5 line-clamp-2">{item.content}</p>
+                            <p className="text-[11px] text-slate-400 mt-1">
+                              {new Date(item.createdAt).toLocaleDateString('id-ID', {
+                                day: 'numeric',
+                                month: 'short',
+                                year: 'numeric',
+                              })}
+                            </p>
+                          </div>
+                          {!item.isRead && (
+                            <button
+                              onClick={() => handleMarkNotificationRead(item.id)}
+                              className="text-xs font-medium text-emerald-600 hover:text-emerald-700"
+                            >
+                              Sudah dibaca
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
           )}
 
           {/* Change Password */}
@@ -505,28 +659,28 @@ const Profile = () => {
                   />
                 </div>
               </div>
-              <button type="submit" className="bg-sky-500 hover:bg-sky-600 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors">
+              <button type="submit" className="bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors">
                 Ubah Password
               </button>
             </form>
           </div>
 
           {/* Danger Zone – only for patients */}
-          {user.role !== 'nurse' && (
-          <div className="bg-white border border-red-100 rounded-xl p-5 sm:p-7">
-            <h3 className="text-lg font-semibold text-red-600 mb-1 flex items-center gap-2">
-              <AlertTriangle className="w-4 h-4" /> Zona Berbahaya
-            </h3>
-            <p className="text-xs text-slate-500 mb-4">
-              Setelah menghapus akun, semua data Anda akan dihapus secara permanen. Tindakan ini tidak dapat dibatalkan.
-            </p>
-            <button
-              onClick={() => setShowDeleteDialog(true)}
-              className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors"
-            >
-              <Trash2 className="w-4 h-4" /> Hapus Akun Saya
-            </button>
-          </div>
+          {!isStaffRole(user.role) && (
+            <div className="bg-white border border-red-100 rounded-xl p-5 sm:p-7">
+              <h3 className="text-lg font-semibold text-red-600 mb-1 flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4" /> Zona Berbahaya
+              </h3>
+              <p className="text-xs text-slate-500 mb-4">
+                Setelah menghapus akun, semua data Anda akan dihapus secara permanen. Tindakan ini tidak dapat dibatalkan.
+              </p>
+              <button
+                onClick={() => setShowDeleteDialog(true)}
+                className="flex items-center gap-2 bg-red-500 hover:bg-red-600 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors"
+              >
+                <Trash2 className="w-4 h-4" /> Hapus Akun Saya
+              </button>
+            </div>
           )}
         </div>
       </section>
@@ -554,7 +708,6 @@ const Profile = () => {
               {[
                 `Profil dan informasi akun`,
                 `Riwayat konsultasi (${userStats.consultationCount} konsultasi)`,
-                `Riwayat artikel dibaca (${userStats.articlesReadCount} artikel)`,
                 `Aktivitas ${userStats.activeDaysCount} hari`
               ].map((item, i) => (
                 <li key={i} className="flex items-start gap-2 text-xs text-slate-500">

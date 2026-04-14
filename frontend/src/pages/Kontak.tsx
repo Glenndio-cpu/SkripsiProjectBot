@@ -4,6 +4,7 @@ import { FaFacebook, FaInstagram, FaYoutube } from 'react-icons/fa';
 import { FaXTwitter } from 'react-icons/fa6';
 import { sendContactEmail, isEmailServiceAvailable } from '../lib/emailService';
 import { Mail, Phone, MapPin, Send, Loader2, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
+import { publicInfo, publicLinks } from '../lib/publicInfo';
 
 const Kontak = () => {
   const [formData, setFormData] = useState({
@@ -66,19 +67,19 @@ const Kontak = () => {
     {
       icon: Mail,
       label: 'Email',
-      value: import.meta.env.VITE_PUSKESMAS_EMAIL || 'puskesmas.desawori@gmail.com',
-      href: `mailto:${import.meta.env.VITE_PUSKESMAS_EMAIL || 'puskesmas.desawori@gmail.com'}`
+      value: publicInfo.email || 'Belum dikonfigurasi',
+      href: publicLinks.email || null,
     },
     {
       icon: Phone,
       label: 'Telepon',
-      value: import.meta.env.VITE_PUSKESMAS_PHONE || '+62 896-5739-8733',
-      href: `tel:${import.meta.env.VITE_PUSKESMAS_PHONE || '+628965739873'}`
+      value: publicInfo.phone || 'Belum dikonfigurasi',
+      href: publicLinks.phone || null,
     },
     {
       icon: MapPin,
       label: 'Alamat',
-      value: 'Puskesmas Desa Wori, Manado, Indonesia',
+      value: publicInfo.address || 'Belum dikonfigurasi',
       href: null
     }
   ];
@@ -97,8 +98,7 @@ const Kontak = () => {
 
           {/* Header */}
           <div className="text-center mb-10 md:mb-14">
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-700 mb-2">Kontak Kami</h1>
-            <p className="text-sm text-slate-400 max-w-md mx-auto">Punya pertanyaan atau masukan? Jangan ragu untuk menghubungi tim kami</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-700 mb-2">Hubungi Kami</h1>
           </div>
 
           {/* Email Service Warning */}
@@ -146,7 +146,7 @@ const Kontak = () => {
                         value={formData.name}
                         onChange={handleChange}
                         required
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent"
                         placeholder="Nama Anda"
                       />
                     </div>
@@ -159,7 +159,7 @@ const Kontak = () => {
                         value={formData.email}
                         onChange={handleChange}
                         required
-                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent"
                         placeholder="nama@email.com"
                       />
                     </div>
@@ -174,7 +174,7 @@ const Kontak = () => {
                       value={formData.subject}
                       onChange={handleChange}
                       required
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent"
                       placeholder="Topik pesan Anda"
                     />
                   </div>
@@ -188,7 +188,7 @@ const Kontak = () => {
                       onChange={handleChange}
                       required
                       rows={5}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent resize-none"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent resize-none"
                       placeholder="Tulis pesan Anda di sini..."
                     />
                   </div>
@@ -196,7 +196,7 @@ const Kontak = () => {
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className="w-full flex items-center justify-center gap-2 bg-sky-500 hover:bg-sky-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
+                    className="w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
                   >
                     {isSubmitting ? (
                       <><Loader2 className="animate-spin w-4 h-4" /> Mengirim...</>
@@ -217,13 +217,13 @@ const Kontak = () => {
                 <div className="space-y-5">
                   {contactInfo.map((item) => (
                     <div key={item.label} className="flex items-start gap-3">
-                      <div className="w-9 h-9 rounded-lg bg-sky-50 flex items-center justify-center flex-shrink-0">
-                        <item.icon className="w-4 h-4 text-sky-500" />
+                      <div className="w-9 h-9 rounded-lg bg-emerald-50 flex items-center justify-center flex-shrink-0">
+                        <item.icon className="w-4 h-4 text-emerald-500" />
                       </div>
                       <div>
                         <p className="text-xs font-medium text-slate-400 mb-0.5">{item.label}</p>
                         {item.href ? (
-                          <a href={item.href} className="text-sm text-slate-700 hover:text-sky-500 transition-colors">{item.value}</a>
+                          <a href={item.href} className="text-sm text-slate-700 hover:text-emerald-500 transition-colors">{item.value}</a>
                         ) : (
                           <p className="text-sm text-slate-700">{item.value}</p>
                         )}
@@ -242,7 +242,7 @@ const Kontak = () => {
                       key={item.label}
                       href={item.href}
                       aria-label={item.label}
-                      className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400 hover:text-sky-500 hover:border-sky-200 hover:bg-sky-50 transition-colors"
+                      className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400 hover:text-emerald-500 hover:border-emerald-200 hover:bg-emerald-50 transition-colors"
                     >
                       <item.icon size={18} />
                     </a>

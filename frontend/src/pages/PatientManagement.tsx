@@ -3,15 +3,21 @@ import { useNavigate } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
 import { getAllUsers, type UserData } from '../lib/userBroadcast';
 import { getAllUserStats } from '../lib/userActivityTracking';
+import { isAdminRole, isHeadRole, isStaffRole } from '../lib/roles';
 import api from '../lib/api';
 import { Download, Users, Search } from 'lucide-react';
 
 interface UserActivity {
   email: string;
   consultationCount: number;
-  articlesRead: string[];
   activeDays: string[];
   lastUpdated: string;
+}
+
+interface ChatHistoryMessage {
+  role: 'user' | 'assistant';
+  content: string;
+  createdAt?: string;
 }
 
 function maskKtp(ktp?: string): string {
@@ -32,9 +38,14 @@ const PatientManagement = () => {
   const [showDetailModal, setShowDetailModal] = useState(false);
   const [allActivities, setAllActivities] = useState<UserActivity[]>([]);
   const [filterType, setFilterType] = useState<'all' | 'with-phone' | 'active' | 'new'>('all');
+  const [currentRole, setCurrentRole] = useState<string>('');
+  const [chatHistory, setChatHistory] = useState<ChatHistoryMessage[]>([]);
+  const [loadingChatHistory, setLoadingChatHistory] = useState(false);
+  const [isEditingPatient, setIsEditingPatient] = useState(false);
+  const [editForm, setEditForm] = useState({ name: '', phone: '', ktp: '' });
 
   useEffect(() => {
-    // Check if user is admin
+    // Check if user is staff
     const userData = localStorage.getItem('user');
     if (!userData) {
       navigate('/login');
@@ -42,10 +53,12 @@ const PatientManagement = () => {
     }
 
     const user = JSON.parse(userData);
-    if (user.role !== 'nurse') {
+    if (!isStaffRole(user.role)) {
       navigate('/');
       return;
     }
+
+    setCurrentRole(user.role || '');
 
     loadPatients();
   }, [navigate]);
@@ -59,7 +72,7 @@ const PatientManagement = () => {
       getAllUsers(),
       getAllUserStats()
     ]);
-    const patientList = usersData.filter((u: any) => u.role !== 'nurse');
+    const patientList = usersData.filter((u: any) => u.role === 'patient');
     setPatients(patientList as any);
     setFilteredPatients(patientList as any);
     setAllActivities(activitiesData as any);
@@ -108,17 +121,59 @@ const PatientManagement = () => {
 
   const handleViewDetails = (patient: UserData) => {
     setSelectedPatient(patient);
-    
+    setEditForm({
+      name: patient.name || '',
+      phone: patient.phone || '',
+      ktp: patient.ktp || '',
+    });
+    setIsEditingPatient(false);
+    loadPatientChatHistory(patient.email);
+
     const activity = allActivities.find((a: any) => a.email === patient.email);
     setPatientActivity(activity || {
       email: patient.email,
       consultationCount: 0,
-      articlesRead: [],
       activeDays: [],
       lastUpdated: new Date().toISOString()
     });
-    
+
     setShowDetailModal(true);
+  };
+
+  const loadPatientChatHistory = async (email: string) => {
+    setLoadingChatHistory(true);
+    try {
+      const res = await api.getChatHistory(email, 'consultation', 20);
+      const messages = (res.messages || []) as ChatHistoryMessage[];
+      setChatHistory(messages.filter((m) => m.role === 'user'));
+    } catch {
+      setChatHistory([]);
+    } finally {
+      setLoadingChatHistory(false);
+    }
+  };
+
+  const handleSavePatientUpdate = async () => {
+    if (!selectedPatient) return;
+    try {
+      await api.updateProfile({
+        email: selectedPatient.email,
+        name: editForm.name.trim(),
+        phone: editForm.phone.trim(),
+        ktp: editForm.ktp.trim(),
+      });
+      alert('Data pasien berhasil diperbarui');
+      setIsEditingPatient(false);
+      await loadPatients();
+      setSelectedPatient((prev) => prev ? {
+        ...prev,
+        name: editForm.name.trim(),
+        phone: editForm.phone.trim(),
+        ktp: editForm.ktp.trim(),
+      } : prev);
+    } catch (error: any) {
+      alert(error?.message || 'Gagal memperbarui data pasien');
+    }
   };
 
   const handleDeletePatient = async (patient: UserData) => {
@@ -140,11 +195,11 @@ const PatientManagement = () => {
   };
 
   const exportToCSV = () => {
-    let csv = 'Nama,Email,Nomor HP,Nomor KTP,Tanggal Daftar,Konsultasi,Artikel Dibaca,Hari Aktif\n';
-    
+    let csv = 'Nama,Email,Nomor HP,Nomor KTP,Tanggal Daftar,Konsultasi,Hari Aktif\n';
+
     filteredPatients.forEach(patient => {
       const activity = allActivities.find((a: any) => a.email === patient.email);
-      csv += `"${patient.name}","${patient.email}","${patient.phone || '-'}","${patient.ktp || '-'}","${new Date(patient.createdAt).toLocaleDateString('id-ID')}",${activity?.consultationCount || 0},${activity?.articlesRead?.length || 0},${activity?.activeDays?.length || 0}\n`;
+      csv += `"${patient.name}","${patient.email}","${patient.phone || '-'}","${patient.ktp || '-'}","${new Date(patient.createdAt).toLocaleDateString('id-ID')}",${activity?.consultationCount || 0},${activity?.activeDays?.length || 0}\n`;
     });
 
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -155,34 +210,45 @@ const PatientManagement = () => {
     a.click();
   };
 
+  const isReadOnlyMonitor = isHeadRole(currentRole);
+  const canOperatePatientData = isStaffRole(currentRole) && !isReadOnlyMonitor;
+
   return (
     <Layout>
-      <div className="max-w-7xl mx-auto px-4 py-8">
+      <div className="space-y-6">
         {/* Header */}
-        <div className="mb-8">
+        <div className="figma-card p-5 sm:p-6">
           <div className="flex items-center justify-between">
             <div>
-              <h1 className="text-3xl font-bold text-slate-700 mb-2">Kelola Pasien</h1>
-              <p className="text-gray-600">
+              <h1 className="figma-heading mb-2">Kelola Pasien</h1>
+              <p className="figma-caption">
                 Total {filteredPatients.length} dari {patients.length} pasien
               </p>
             </div>
-            <button
-              onClick={exportToCSV}
-              className="flex items-center gap-2 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
-            >
-              <Download className="w-5 h-5" />
-              <span>Export CSV</span>
-            </button>
+            {!isReadOnlyMonitor && (
+              <button
+                onClick={exportToCSV}
+                className="figma-btn-primary"
+              >
+                <Download className="w-5 h-5" />
+                <span>Export CSV</span>
+              </button>
+            )}
           </div>
         </div>
 
+        {isReadOnlyMonitor && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Mode monitoring aktif. Kepala Puskesmas hanya dapat melihat data pasien dan laporan penggunaan chatbot tanpa penginputan/perubahan data.
+          </div>
+        )}
+
         {/* Filters */}
-        <div className="bg-white rounded-xl shadow-sm p-6 mb-6">
+        <div className="figma-card p-6">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {/* Search */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-emerald-800 mb-2">
                 Cari Pasien
               </label>
               <input
@@ -190,19 +256,19 @@ const PatientManagement = () => {
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 placeholder="Nama, email, atau nomor HP..."
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                className="figma-input"
               />
             </div>
 
             {/* Filter Type */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-emerald-800 mb-2">
                 Filter
               </label>
               <select
                 value={filterType}
                 onChange={(e) => setFilterType(e.target.value as any)}
-                className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500 focus:border-transparent"
+                className="figma-input"
               >
                 <option value="all">Semua Pasien</option>
                 <option value="with-phone">Dengan Nomor HP</option>
@@ -214,42 +280,42 @@ const PatientManagement = () => {
         </div>
 
         {/* Patient List */}
-        <div className="bg-white rounded-xl shadow-sm overflow-hidden">
+        <div className="figma-card overflow-hidden">
           {filteredPatients.length === 0 ? (
             <div className="text-center py-12">
-              <Users className="w-16 h-16 mx-auto text-gray-400" />
-              <p className="text-gray-500 mt-4">Tidak ada pasien yang ditemukan</p>
+              <Users className="w-16 h-16 mx-auto text-emerald-300" />
+              <p className="text-emerald-700/70 mt-4">Tidak ada pasien yang ditemukan</p>
             </div>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full">
-                <thead className="bg-gray-50 border-b border-gray-200">
+                <thead className="bg-emerald-50/70 border-b border-emerald-100">
                   <tr>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-emerald-700 uppercase tracking-wider">
                       Pasien
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-emerald-700 uppercase tracking-wider">
                       Kontak
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-emerald-700 uppercase tracking-wider">
                       KTP
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-emerald-700 uppercase tracking-wider">
                       Tanggal Daftar
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-emerald-700 uppercase tracking-wider">
                       Aktivitas
                     </th>
-                    <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    <th className="px-6 py-3 text-left text-xs font-medium text-emerald-700 uppercase tracking-wider">
                       Aksi
                     </th>
                   </tr>
                 </thead>
-                <tbody className="bg-white divide-y divide-gray-200">
+                <tbody className="bg-white divide-y divide-emerald-100">
                   {filteredPatients.map((patient, index) => {
                     const activity = allActivities.find((a: any) => a.email === patient.email);
                     return (
-                      <tr key={index} className="hover:bg-gray-50 transition-colors">
+                      <tr key={index} className="hover:bg-emerald-50/40 transition-colors">
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="flex items-center">
                             {patient.profileImage ? (
@@ -259,28 +325,28 @@ const PatientManagement = () => {
                                 className="w-10 h-10 rounded-full object-cover"
                               />
                             ) : (
-                              <div className="w-10 h-10 bg-sky-50 rounded-full flex items-center justify-center">
-                                <span className="text-sky-500 font-bold">
+                              <div className="w-10 h-10 bg-emerald-50 rounded-full flex items-center justify-center">
+                                <span className="text-emerald-500 font-bold">
                                   {patient.name.charAt(0).toUpperCase()}
                                 </span>
                               </div>
                             )}
                             <div className="ml-3">
-                              <p className="text-sm font-medium text-gray-900">{patient.name}</p>
-                              <p className="text-sm text-gray-500">{patient.email}</p>
+                              <p className="text-sm font-medium text-emerald-900">{patient.name}</p>
+                              <p className="text-sm text-emerald-700/70">{patient.email}</p>
                             </div>
                           </div>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <p className="text-sm text-gray-900">
+                          <p className="text-sm text-emerald-800">
                             {patient.phone || '-'}
                           </p>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <p className="text-sm text-gray-900">{maskKtp(patient.ktp)}</p>
+                          <p className="text-sm text-emerald-800">{maskKtp(patient.ktp)}</p>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
-                          <p className="text-sm text-gray-900">
+                          <p className="text-sm text-emerald-800">
                             {new Date(patient.createdAt).toLocaleDateString('id-ID', {
                               day: 'numeric',
                               month: 'short',
@@ -290,13 +356,10 @@ const PatientManagement = () => {
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
                           <div className="flex gap-3 text-xs">
-                            <span className="bg-blue-100 text-blue-800 px-2 py-1 rounded">
+                            <span className="bg-emerald-100 text-emerald-800 px-2 py-1 rounded-md">
                               Konsultasi: {activity?.consultationCount || 0}
                             </span>
-                            <span className="bg-purple-100 text-purple-800 px-2 py-1 rounded">
-                              Artikel: {activity?.articlesRead.length || 0}
-                            </span>
-                            <span className="bg-green-100 text-green-800 px-2 py-1 rounded">
+                            <span className="bg-emerald-50 text-emerald-700 px-2 py-1 rounded-md border border-emerald-100">
                               Hari Aktif: {activity?.activeDays.length || 0}
                             </span>
                           </div>
@@ -304,7 +367,7 @@ const PatientManagement = () => {
                         <td className="px-6 py-4 whitespace-nowrap text-sm">
                           <button
                             onClick={() => handleViewDetails(patient)}
-                            className="text-sky-500 hover:text-slate-800 font-medium"
+                            className="text-emerald-500 hover:text-slate-800 font-medium"
                           >
                             Lihat Detail
                           </button>
@@ -320,8 +383,8 @@ const PatientManagement = () => {
 
         {/* Detail Modal */}
         {showDetailModal && selectedPatient && patientActivity && (
-          <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl max-w-2xl w-full max-h-[90vh] overflow-y-auto">
+          <div className="fixed inset-0 bg-black/45 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+            <div className="figma-card max-w-2xl w-full max-h-[90vh] overflow-y-auto">
               {/* Modal Header */}
               <div className="sticky top-0 bg-white border-b border-gray-200 px-6 py-4 flex items-center justify-between">
                 <h2 className="text-2xl font-bold text-gray-800">Detail Pasien</h2>
@@ -341,18 +404,32 @@ const PatientManagement = () => {
                     <img
                       src={selectedPatient.profileImage}
                       alt={selectedPatient.name}
-                      className="w-20 h-20 rounded-full object-cover border-4 border-sky-50"
+                      className="w-20 h-20 rounded-full object-cover border-4 border-emerald-50"
                     />
                   ) : (
-                    <div className="w-20 h-20 bg-sky-50 rounded-full flex items-center justify-center border-4 border-sky-200">
-                      <span className="text-sky-500 font-bold text-3xl">
+                    <div className="w-20 h-20 bg-emerald-50 rounded-full flex items-center justify-center border-4 border-emerald-200">
+                      <span className="text-emerald-500 font-bold text-3xl">
                         {selectedPatient.name.charAt(0).toUpperCase()}
                       </span>
                     </div>
                   )}
-                  <div>
-                    <h3 className="text-xl font-bold text-gray-800">{selectedPatient.name}</h3>
-                    <p className="text-gray-600">{selectedPatient.email}</p>
+                  <div className="flex-1">
+                    {isEditingPatient ? (
+                      <div className="space-y-2">
+                        <input
+                          value={editForm.name}
+                          onChange={(e) => setEditForm((prev) => ({ ...prev, name: e.target.value }))}
+                          className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                          placeholder="Nama pasien"
+                        />
+                        <p className="text-gray-600 text-sm">{selectedPatient.email}</p>
+                      </div>
+                    ) : (
+                      <>
+                        <h3 className="text-xl font-bold text-gray-800">{selectedPatient.name}</h3>
+                        <p className="text-gray-600">{selectedPatient.email}</p>
+                      </>
+                    )}
                   </div>
                 </div>
 
@@ -360,15 +437,29 @@ const PatientManagement = () => {
                 <div className="grid grid-cols-2 gap-4">
                   <div className="bg-gray-50 p-4 rounded-lg">
                     <p className="text-sm text-gray-500 mb-1">Nomor HP</p>
-                    <p className="font-medium text-gray-800">
-                      {selectedPatient.phone || 'Tidak ada'}
-                    </p>
+                    {isEditingPatient ? (
+                      <input
+                        value={editForm.phone}
+                        onChange={(e) => setEditForm((prev) => ({ ...prev, phone: e.target.value }))}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                        placeholder="Nomor HP"
+                      />
+                    ) : (
+                      <p className="font-medium text-gray-800">{selectedPatient.phone || 'Tidak ada'}</p>
+                    )}
                   </div>
                   <div className="bg-gray-50 p-4 rounded-lg">
                     <p className="text-sm text-gray-500 mb-1">Nomor KTP</p>
-                    <p className="font-medium text-gray-800">
-                      {maskKtp(selectedPatient.ktp)}
-                    </p>
+                    {isEditingPatient ? (
+                      <input
+                        value={editForm.ktp}
+                        onChange={(e) => setEditForm((prev) => ({ ...prev, ktp: e.target.value.replace(/\D/g, '').slice(0, 16) }))}
+                        className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                        placeholder="KTP 16 digit"
+                      />
+                    ) : (
+                      <p className="font-medium text-gray-800">{maskKtp(selectedPatient.ktp)}</p>
+                    )}
                   </div>
                   <div className="bg-gray-50 p-4 rounded-lg">
                     <p className="text-sm text-gray-500 mb-1">Tanggal Daftar</p>
@@ -385,14 +476,10 @@ const PatientManagement = () => {
                 {/* Activity Statistics */}
                 <div>
                   <h4 className="font-semibold text-gray-800 mb-3">Statistik Aktivitas</h4>
-                  <div className="grid grid-cols-3 gap-4">
+                  <div className="grid grid-cols-2 gap-4">
                     <div className="bg-blue-50 p-4 rounded-lg text-center">
                       <p className="text-3xl font-bold text-blue-600">{patientActivity.consultationCount}</p>
                       <p className="text-sm text-gray-600 mt-1">Konsultasi</p>
-                    </div>
-                    <div className="bg-purple-50 p-4 rounded-lg text-center">
-                      <p className="text-3xl font-bold text-purple-600">{patientActivity.articlesRead.length}</p>
-                      <p className="text-sm text-gray-600 mt-1">Artikel Dibaca</p>
                     </div>
                     <div className="bg-green-50 p-4 rounded-lg text-center">
                       <p className="text-3xl font-bold text-green-600">{patientActivity.activeDays.length}</p>
@@ -401,24 +488,34 @@ const PatientManagement = () => {
                   </div>
                 </div>
 
-                {/* Articles Read */}
-                {patientActivity.articlesRead.length > 0 && (
-                  <div>
-                    <h4 className="font-semibold text-gray-800 mb-3">Artikel yang Dibaca</h4>
-                    <div className="bg-gray-50 p-4 rounded-lg">
-                      <div className="flex flex-wrap gap-2">
-                        {patientActivity.articlesRead.map((article, idx) => (
-                          <span
-                            key={idx}
-                            className="bg-white px-3 py-1 rounded-full text-sm text-gray-700 border border-gray-200"
-                          >
-                            {article}
-                          </span>
-                        ))}
-                      </div>
-                    </div>
+                {/* Chatbot Questions Log */}
+                <div>
+                  <h4 className="font-semibold text-gray-800 mb-3">Log Pertanyaan Pasien (Chatbot)</h4>
+                  <div className="bg-gray-50 border border-gray-200 p-4 rounded-lg space-y-3 max-h-56 overflow-y-auto">
+                    {loadingChatHistory ? (
+                      <p className="text-sm text-gray-500">Memuat log pertanyaan...</p>
+                    ) : chatHistory.length === 0 ? (
+                      <p className="text-sm text-gray-500">Belum ada pertanyaan chatbot dari pasien ini.</p>
+                    ) : (
+                      chatHistory.map((msg, idx) => (
+                        <div key={idx} className="bg-white border border-gray-200 rounded-lg px-3 py-2">
+                          <p className="text-sm text-gray-700">{msg.content}</p>
+                          {msg.createdAt && (
+                            <p className="text-[11px] text-gray-400 mt-1">
+                              {new Date(msg.createdAt).toLocaleString('id-ID', {
+                                day: '2-digit',
+                                month: 'short',
+                                year: 'numeric',
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
+                            </p>
+                          )}
+                        </div>
+                      ))
+                    )}
                   </div>
-                )}
+                </div>
 
                 {/* Last Activity */}
                 <div className="bg-yellow-50 border border-yellow-200 p-4 rounded-lg">
@@ -436,6 +533,38 @@ const PatientManagement = () => {
 
                 {/* Actions */}
                 <div className="flex gap-3 pt-4 border-t border-gray-200">
+                  {canOperatePatientData && (
+                    isEditingPatient ? (
+                      <>
+                        <button
+                          onClick={handleSavePatientUpdate}
+                          className="flex-1 bg-emerald-500 text-white px-4 py-2 rounded-lg hover:bg-emerald-600 transition-colors"
+                        >
+                          Simpan Perubahan
+                        </button>
+                        <button
+                          onClick={() => {
+                            setIsEditingPatient(false);
+                            setEditForm({
+                              name: selectedPatient.name || '',
+                              phone: selectedPatient.phone || '',
+                              ktp: selectedPatient.ktp || '',
+                            });
+                          }}
+                          className="flex-1 bg-gray-200 text-gray-700 px-4 py-2 rounded-lg hover:bg-gray-300 transition-colors"
+                        >
+                          Batal Edit
+                        </button>
+                      </>
+                    ) : (
+                      <button
+                        onClick={() => setIsEditingPatient(true)}
+                        className="flex-1 bg-emerald-500 text-white px-4 py-2 rounded-lg hover:bg-emerald-600 transition-colors"
+                      >
+                        Perbarui Data Pasien
+                      </button>
+                    )
+                  )}
                   <button
                     onClick={() => {
                       if (selectedPatient.phone) {
@@ -447,14 +576,16 @@ const PatientManagement = () => {
                     disabled={!selectedPatient.phone}
                     className="flex-1 bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
                   >
-                     Chat WhatsApp
+                    Chat WhatsApp
                   </button>
-                  <button
-                    onClick={() => handleDeletePatient(selectedPatient)}
-                    className="flex-1 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors"
-                  >
-                     Hapus Pasien
-                  </button>
+                  {isAdminRole(currentRole) && (
+                    <button
+                      onClick={() => handleDeletePatient(selectedPatient)}
+                      className="flex-1 bg-red-600 text-white px-4 py-2 rounded-lg hover:bg-red-700 transition-colors"
+                    >
+                      Hapus Pasien
+                    </button>
+                  )}
                 </div>
               </div>
             </div>

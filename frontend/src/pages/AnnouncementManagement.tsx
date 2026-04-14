@@ -2,13 +2,15 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
 import api from '../lib/api';
+import { isHeadRole, isStaffRole } from '../lib/roles';
 import {
   Bell, Plus, Trash2, Edit3, ToggleLeft, ToggleRight, Loader2,
-  Info, AlertTriangle, CheckCircle, X, Calendar, ArrowUp, ArrowDown,
+  Info, AlertTriangle, CheckCircle, X, Calendar, ArrowUp,
 } from 'lucide-react';
 
 interface Announcement {
   id: number;
+  category?: 'health_info' | 'schedule';
   title: string;
   content: string;
   type: 'info' | 'warning' | 'success' | 'urgent';
@@ -17,21 +19,24 @@ interface Announcement {
   createdBy: string;
   createdAt: string;
   expiresAt: string | null;
+  approvalStatus: 'pending' | 'approved' | 'rejected';
+  approvedBy?: string | null;
+  approvedAt?: string | null;
 }
 
 const TYPE_OPTIONS = [
-  { value: 'info', label: 'Informasi', color: 'bg-sky-100 text-sky-700', icon: Info },
+  { value: 'info', label: 'Informasi', color: 'bg-emerald-100 text-emerald-700', icon: Info },
   { value: 'warning', label: 'Peringatan', color: 'bg-amber-100 text-amber-700', icon: AlertTriangle },
   { value: 'success', label: 'Sukses', color: 'bg-emerald-100 text-emerald-700', icon: CheckCircle },
   { value: 'urgent', label: 'Mendesak', color: 'bg-red-100 text-red-700', icon: Bell },
 ];
 
-function getAdminEmail(): string {
+function getActorEmail(): string {
   try {
     const raw = localStorage.getItem('user');
     if (raw) {
       const u = JSON.parse(raw);
-      if (u.role === 'nurse') return u.email;
+      if (isStaffRole(u.role)) return u.email;
     }
   } catch { /* */ }
   return '';
@@ -42,6 +47,7 @@ const AnnouncementManagement = () => {
   const [announcements, setAnnouncements] = useState<Announcement[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [role, setRole] = useState<string>('');
 
   // Form state
   const [showForm, setShowForm] = useState(false);
@@ -58,17 +64,34 @@ const AnnouncementManagement = () => {
     const userData = localStorage.getItem('user');
     if (!userData) { navigate('/login'); return; }
     const user = JSON.parse(userData);
-    if (user.role !== 'nurse') { navigate('/'); return; }
+    if (!isStaffRole(user.role)) { navigate('/'); return; }
+    setRole(user.role || '');
     loadData();
   }, [navigate]);
+
+  const handleExpiredSession = () => {
+    localStorage.removeItem('user');
+    window.dispatchEvent(new Event('userUpdated'));
+    navigate('/login', { replace: true });
+  };
+
+  const isSessionInvalidError = (message: string): boolean => {
+    const lower = message.toLowerCase();
+    return lower.includes('sesi tidak valid') || lower.includes('login ulang') || lower.includes('http 401');
+  };
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const data = await api.getAnnouncements(getAdminEmail());
+      const data = await api.getAnnouncements(getActorEmail(), 'health_info');
       setAnnouncements(data.announcements || []);
     } catch (err: any) {
-      alert('Gagal memuat pengumuman: ' + err.message);
+      const msg = String(err?.message || 'Gagal memuat pengumuman');
+      if (isSessionInvalidError(msg)) {
+        handleExpiredSession();
+        return;
+      }
+      alert('Gagal memuat pengumuman: ' + msg);
     } finally {
       setLoading(false);
     }
@@ -102,7 +125,8 @@ const AnnouncementManagement = () => {
     setSaving(true);
     try {
       const payload = {
-        adminEmail: getAdminEmail(),
+        adminEmail: getActorEmail(),
+        category: 'health_info' as const,
         title: form.title.trim(),
         content: form.content.trim(),
         type: form.type,
@@ -117,7 +141,12 @@ const AnnouncementManagement = () => {
       resetForm();
       loadData();
     } catch (err: any) {
-      alert('Gagal: ' + err.message);
+      const msg = String(err?.message || 'Gagal menyimpan pengumuman');
+      if (isSessionInvalidError(msg)) {
+        handleExpiredSession();
+        return;
+      }
+      alert('Gagal: ' + msg);
     } finally {
       setSaving(false);
     }
@@ -126,22 +155,46 @@ const AnnouncementManagement = () => {
   const handleToggle = async (ann: Announcement) => {
     try {
       await api.updateAnnouncement(ann.id, {
-        adminEmail: getAdminEmail(),
+        adminEmail: getActorEmail(),
         active: !ann.active,
       });
       loadData();
     } catch (err: any) {
-      alert('Gagal: ' + err.message);
+      const msg = String(err?.message || 'Gagal mengubah status pengumuman');
+      if (isSessionInvalidError(msg)) {
+        handleExpiredSession();
+        return;
+      }
+      alert('Gagal: ' + msg);
     }
   };
 
   const handleDelete = async (id: number) => {
     if (!confirm('Hapus pengumuman ini?')) return;
     try {
-      await api.deleteAnnouncement(id, getAdminEmail());
+      await api.deleteAnnouncement(id, getActorEmail());
       loadData();
     } catch (err: any) {
-      alert('Gagal: ' + err.message);
+      const msg = String(err?.message || 'Gagal menghapus pengumuman');
+      if (isSessionInvalidError(msg)) {
+        handleExpiredSession();
+        return;
+      }
+      alert('Gagal: ' + msg);
+    }
+  };
+
+  const handleApproval = async (id: number, status: 'approved' | 'rejected') => {
+    try {
+      await api.setAnnouncementApproval(id, status);
+      loadData();
+    } catch (err: any) {
+      const msg = String(err?.message || 'Gagal validasi pengumuman');
+      if (isSessionInvalidError(msg)) {
+        handleExpiredSession();
+        return;
+      }
+      alert('Gagal validasi: ' + msg);
     }
   };
 
@@ -152,12 +205,15 @@ const AnnouncementManagement = () => {
     return (
       <Layout>
         <div className="flex items-center justify-center py-32">
-          <Loader2 className="w-8 h-8 animate-spin text-sky-500" />
+          <Loader2 className="w-8 h-8 animate-spin text-emerald-500" />
           <span className="ml-3 text-slate-500">Memuat pengumuman...</span>
         </div>
       </Layout>
     );
   }
+
+  const canEdit = role === 'nurse';
+  const canApprove = isHeadRole(role);
 
   const activeCount = announcements.filter(a => a.active).length;
   const expiredCount = announcements.filter(a => a.expiresAt && new Date(a.expiresAt) < new Date()).length;
@@ -168,19 +224,31 @@ const AnnouncementManagement = () => {
         {/* Header */}
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 mb-8">
           <div>
-            <h1 className="text-2xl sm:text-3xl font-bold text-slate-700">Kelola Pengumuman</h1>
-            <p className="text-slate-500 text-sm mt-1">Buat pengumuman yang tampil sebagai banner di halaman Beranda</p>
+            <h1 className="text-2xl sm:text-3xl font-bold text-slate-700">
+              {isHeadRole(role) ? 'Validasi Informasi Kesehatan' : 'Kelola Informasi Kesehatan'}
+            </h1>
+            <p className="text-slate-500 text-sm mt-1">
+              {isHeadRole(role)
+                ? 'Kepala Puskesmas memvalidasi informasi sebelum ditampilkan ke publik.'
+                : 'Kelola konten edukasi kesehatan yang ditampilkan ke seluruh pasien'}
+            </p>
           </div>
-          {!showForm && (
+          {canEdit && !showForm && (
             <button
               onClick={() => { resetForm(); setShowForm(true); }}
-              className="inline-flex items-center gap-2 px-4 py-2.5 bg-sky-500 hover:bg-sky-600 text-white text-sm font-medium rounded-lg transition-colors"
+              className="inline-flex items-center gap-2 px-4 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg transition-colors"
             >
               <Plus className="w-4 h-4" />
-              Buat Pengumuman
+              Buat Informasi
             </button>
           )}
         </div>
+
+        {!canEdit && (
+          <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Mode validasi aktif. Kepala Puskesmas hanya melakukan monitoring dan approval informasi kesehatan.
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-3 gap-3 sm:gap-4 mb-6">
@@ -199,7 +267,7 @@ const AnnouncementManagement = () => {
         </div>
 
         {/* Form */}
-        {showForm && (
+        {canEdit && showForm && (
           <div className="bg-white border border-slate-200 rounded-xl p-5 sm:p-6 mb-6">
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-lg font-semibold text-slate-700">
@@ -217,8 +285,8 @@ const AnnouncementManagement = () => {
                   type="text"
                   value={form.title}
                   onChange={e => setForm({ ...form, title: e.target.value })}
-                  placeholder="Contoh: Jadwal Imunisasi Bulan Ini"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent"
+                  placeholder="Contoh: Tips mencegah demam berdarah"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent"
                   maxLength={255}
                 />
               </div>
@@ -229,9 +297,9 @@ const AnnouncementManagement = () => {
                 <textarea
                   value={form.content}
                   onChange={e => setForm({ ...form, content: e.target.value })}
-                  placeholder="Tulis isi pengumuman yang akan ditampilkan di banner..."
+                  placeholder="Tulis konten edukasi kesehatan untuk pasien..."
                   rows={3}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-sky-400 focus:border-transparent resize-none"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent resize-none"
                 />
               </div>
 
@@ -242,7 +310,7 @@ const AnnouncementManagement = () => {
                   <select
                     value={form.type}
                     onChange={e => setForm({ ...form, type: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-400"
                   >
                     {TYPE_OPTIONS.map(t => (
                       <option key={t.value} value={t.value}>{t.label}</option>
@@ -259,7 +327,7 @@ const AnnouncementManagement = () => {
                     onChange={e => setForm({ ...form, priority: Number(e.target.value) })}
                     min={0}
                     max={100}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-400"
                   />
                   <p className="text-[11px] text-slate-400 mt-0.5">Angka lebih tinggi = muncul lebih dulu</p>
                 </div>
@@ -271,7 +339,7 @@ const AnnouncementManagement = () => {
                     type="datetime-local"
                     value={form.expiresAt}
                     onChange={e => setForm({ ...form, expiresAt: e.target.value })}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-sky-400"
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-400"
                   />
                 </div>
               </div>
@@ -280,34 +348,30 @@ const AnnouncementManagement = () => {
               {form.title.trim() && (
                 <div className="mt-2">
                   <p className="text-xs font-medium text-slate-400 mb-1.5">Preview Banner:</p>
-                  <div className={`rounded-lg border p-3 flex items-start gap-3 ${
-                    form.type === 'info' ? 'bg-sky-50 border-sky-200' :
+                  <div className={`rounded-lg border p-3 flex items-start gap-3 ${form.type === 'info' ? 'bg-emerald-50 border-emerald-200' :
                     form.type === 'warning' ? 'bg-amber-50 border-amber-200' :
-                    form.type === 'success' ? 'bg-emerald-50 border-emerald-200' :
-                    'bg-red-50 border-red-200'
-                  }`}>
+                      form.type === 'success' ? 'bg-emerald-50 border-emerald-200' :
+                        'bg-red-50 border-red-200'
+                    }`}>
                     {React.createElement(getTypeConfig(form.type).icon, {
-                      className: `w-5 h-5 flex-shrink-0 mt-0.5 ${
-                        form.type === 'info' ? 'text-sky-500' :
+                      className: `w-5 h-5 flex-shrink-0 mt-0.5 ${form.type === 'info' ? 'text-emerald-500' :
                         form.type === 'warning' ? 'text-amber-500' :
-                        form.type === 'success' ? 'text-emerald-500' :
-                        'text-red-500'
-                      }`
+                          form.type === 'success' ? 'text-emerald-500' :
+                            'text-red-500'
+                        }`
                     })}
                     <div>
-                      <p className={`text-sm font-semibold ${
-                        form.type === 'info' ? 'text-sky-800' :
+                      <p className={`text-sm font-semibold ${form.type === 'info' ? 'text-emerald-800' :
                         form.type === 'warning' ? 'text-amber-800' :
-                        form.type === 'success' ? 'text-emerald-800' :
-                        'text-red-800'
-                      }`}>{form.title}</p>
+                          form.type === 'success' ? 'text-emerald-800' :
+                            'text-red-800'
+                        }`}>{form.title}</p>
                       {form.content.trim() && (
-                        <p className={`text-sm mt-0.5 ${
-                          form.type === 'info' ? 'text-sky-600' :
+                        <p className={`text-sm mt-0.5 ${form.type === 'info' ? 'text-emerald-600' :
                           form.type === 'warning' ? 'text-amber-600' :
-                          form.type === 'success' ? 'text-emerald-600' :
-                          'text-red-600'
-                        }`}>{form.content}</p>
+                            form.type === 'success' ? 'text-emerald-600' :
+                              'text-red-600'
+                          }`}>{form.content}</p>
                       )}
                     </div>
                   </div>
@@ -319,10 +383,10 @@ const AnnouncementManagement = () => {
                 <button
                   type="submit"
                   disabled={saving}
-                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-sky-500 hover:bg-sky-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                  className="inline-flex items-center gap-2 px-5 py-2.5 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
                 >
                   {saving ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                  {editId ? 'Simpan Perubahan' : 'Buat Pengumuman'}
+                  {editId ? 'Simpan Perubahan' : 'Buat Informasi'}
                 </button>
                 <button
                   type="button"
@@ -340,8 +404,12 @@ const AnnouncementManagement = () => {
         {announcements.length === 0 ? (
           <div className="bg-white border border-slate-100 rounded-xl p-12 text-center">
             <Bell className="w-12 h-12 text-slate-300 mx-auto mb-3" />
-            <p className="text-slate-500 font-medium">Belum ada pengumuman</p>
-            <p className="text-slate-400 text-sm mt-1">Buat pengumuman pertama untuk ditampilkan di halaman Beranda</p>
+            <p className="text-slate-500 font-medium">Belum ada informasi kesehatan</p>
+            <p className="text-slate-400 text-sm mt-1">
+              {canEdit
+                ? 'Buat informasi kesehatan pertama untuk dikirim ke pasien'
+                : 'Belum ada informasi kesehatan untuk divalidasi'}
+            </p>
           </div>
         ) : (
           <div className="space-y-3">
@@ -351,9 +419,8 @@ const AnnouncementManagement = () => {
               return (
                 <div
                   key={ann.id}
-                  className={`bg-white border rounded-xl overflow-hidden transition-opacity ${
-                    !ann.active || isExpired ? 'opacity-60 border-slate-200' : 'border-slate-100'
-                  }`}
+                  className={`bg-white border rounded-xl overflow-hidden transition-opacity ${!ann.active || isExpired ? 'opacity-60 border-slate-200' : 'border-slate-100'
+                    }`}
                 >
                   <div className="flex items-start gap-4 p-4 sm:p-5">
                     {/* Type badge */}
@@ -391,9 +458,27 @@ const AnnouncementManagement = () => {
                             <ArrowUp className="w-3 h-3" /> {ann.priority}
                           </span>
                         )}
+                        {ann.approvalStatus === 'approved' ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-emerald-50 text-emerald-700">
+                            Tervalidasi
+                          </span>
+                        ) : ann.approvalStatus === 'rejected' ? (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-red-50 text-red-700">
+                            Ditolak
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center px-2 py-0.5 rounded text-[11px] font-semibold bg-amber-50 text-amber-700">
+                            Menunggu Validasi
+                          </span>
+                        )}
                         <span className="text-[11px] text-slate-400">
                           {new Date(ann.createdAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
                         </span>
+                        {ann.approvedBy && ann.approvedAt && (
+                          <span className="text-[11px] text-slate-400">
+                            divalidasi oleh {ann.approvedBy} pada {new Date(ann.approvedAt).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}
+                          </span>
+                        )}
                         {ann.expiresAt && (
                           <span className="inline-flex items-center gap-1 text-[11px] text-slate-400">
                             <Calendar className="w-3 h-3" />
@@ -405,29 +490,50 @@ const AnnouncementManagement = () => {
 
                     {/* Actions */}
                     <div className="flex items-center gap-1 flex-shrink-0">
-                      <button
-                        onClick={() => handleToggle(ann)}
-                        className={`p-2 rounded-lg transition-colors ${
-                          ann.active ? 'text-emerald-500 hover:bg-emerald-50' : 'text-slate-400 hover:bg-slate-50'
-                        }`}
-                        title={ann.active ? 'Nonaktifkan' : 'Aktifkan'}
-                      >
-                        {ann.active ? <ToggleRight className="w-5 h-5" /> : <ToggleLeft className="w-5 h-5" />}
-                      </button>
-                      <button
-                        onClick={() => handleEdit(ann)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-sky-500 hover:bg-sky-50 transition-colors"
-                        title="Edit"
-                      >
-                        <Edit3 className="w-4 h-4" />
-                      </button>
-                      <button
-                        onClick={() => handleDelete(ann.id)}
-                        className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
-                        title="Hapus"
-                      >
-                        <Trash2 className="w-4 h-4" />
-                      </button>
+                      {canApprove && ann.approvalStatus !== 'approved' && (
+                        <button
+                          onClick={() => handleApproval(ann.id, 'approved')}
+                          className="p-2 rounded-lg text-emerald-600 hover:bg-emerald-50 transition-colors"
+                          title="Setujui/Validasi"
+                        >
+                          <CheckCircle className="w-4 h-4" />
+                        </button>
+                      )}
+                      {canApprove && ann.approvalStatus !== 'rejected' && (
+                        <button
+                          onClick={() => handleApproval(ann.id, 'rejected')}
+                          className="p-2 rounded-lg text-red-500 hover:bg-red-50 transition-colors"
+                          title="Tolak"
+                        >
+                          <X className="w-4 h-4" />
+                        </button>
+                      )}
+                      {canEdit && (
+                        <>
+                          <button
+                            onClick={() => handleToggle(ann)}
+                            className={`p-2 rounded-lg transition-colors ${ann.active ? 'text-emerald-500 hover:bg-emerald-50' : 'text-slate-400 hover:bg-slate-50'
+                              }`}
+                            title={ann.active ? 'Nonaktifkan' : 'Aktifkan'}
+                          >
+                            {ann.active ? <ToggleRight className="w-5 h-5" /> : <ToggleLeft className="w-5 h-5" />}
+                          </button>
+                          <button
+                            onClick={() => handleEdit(ann)}
+                            className="p-2 rounded-lg text-slate-400 hover:text-emerald-500 hover:bg-emerald-50 transition-colors"
+                            title="Edit"
+                          >
+                            <Edit3 className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDelete(ann.id)}
+                            className="p-2 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition-colors"
+                            title="Hapus"
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

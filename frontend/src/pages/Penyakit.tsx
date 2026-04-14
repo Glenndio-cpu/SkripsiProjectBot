@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import Layout from '../components/layout/Layout';
-import { trackArticleRead } from '../lib/userActivityTracking';
 import { Bug, HeartPulse, AlertTriangle, Search, ChevronLeft, ChevronRight, ExternalLink, MessageCircle } from 'lucide-react';
 
 type DiseaseType = 'menular' | 'tidak-menular';
@@ -19,10 +18,6 @@ const Penyakit = () => {
   const [selectedType, setSelectedType] = useState<DiseaseType | 'semua'>('semua');
   const [selectedSeverity, setSelectedSeverity] = useState<SeverityLevel | 'semua'>('semua');
   const [expandedPandemic, setExpandedPandemic] = useState<number | null>(null);
-
-  const handleDiseaseClick = (diseaseName: string) => {
-    trackArticleRead(diseaseName);
-  };
 
   const diseases: Disease[] = [
     { name: "COVID-19", symptoms: "Demam, batuk kering, kelelahan, kehilangan indra penciuman dan perasa", prevention: "Vaksinasi, menjaga jarak, memakai masker, sering mencuci tangan", type: "menular", severity: "sedang", transmission: "Droplet pernapasan saat batuk/bersin, kontak dengan permukaan terkontaminasi" },
@@ -116,7 +111,7 @@ const Penyakit = () => {
                     key={type}
                     onClick={() => setSelectedType(type)}
                     className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                      selectedType === type ? 'bg-sky-500 text-white' : 'bg-white text-slate-600 border border-slate-200 hover:border-sky-300'
+                      selectedType === type ? 'bg-emerald-500 text-white' : 'bg-white text-slate-600 border border-slate-200 hover:border-emerald-300'
                     }`}
                   >
                     {type === 'semua' ? 'Semua' : type === 'menular' ? 'Menular' : 'Tidak Menular'}
@@ -130,7 +125,7 @@ const Penyakit = () => {
                 <button
                   onClick={() => setSelectedSeverity('semua')}
                   className={`px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                    selectedSeverity === 'semua' ? 'bg-sky-500 text-white' : 'bg-white text-slate-600 border border-slate-200 hover:border-sky-300'
+                    selectedSeverity === 'semua' ? 'bg-emerald-500 text-white' : 'bg-white text-slate-600 border border-slate-200 hover:border-emerald-300'
                   }`}
                 >
                   Semua
@@ -165,12 +160,11 @@ const Penyakit = () => {
                 return (
                   <article
                     key={index}
-                    className="bg-white p-5 rounded-xl border border-slate-100 hover:border-sky-200 transition-colors cursor-pointer"
-                    onClick={() => handleDiseaseClick(disease.name)}
+                    className="bg-white p-5 rounded-xl border border-slate-100 hover:border-emerald-200 transition-colors"
                   >
                     <div className="flex items-center gap-3 mb-3">
                       {disease.type === 'menular'
-                        ? <Bug className="w-5 h-5 text-sky-500 flex-shrink-0" />
+                        ? <Bug className="w-5 h-5 text-emerald-500 flex-shrink-0" />
                         : <HeartPulse className="w-5 h-5 text-purple-500 flex-shrink-0" />
                       }
                       <h2 className="text-base font-semibold text-slate-700 leading-tight">{disease.name}</h2>
@@ -178,7 +172,7 @@ const Penyakit = () => {
 
                     <div className="flex flex-wrap gap-1.5 mb-4">
                       <span className={`px-2 py-0.5 rounded text-xs font-medium ${sev.bg}`}>{sev.label}</span>
-                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${disease.type === 'menular' ? 'bg-sky-50 text-sky-700' : 'bg-purple-50 text-purple-700'}`}>
+                      <span className={`px-2 py-0.5 rounded text-xs font-medium ${disease.type === 'menular' ? 'bg-emerald-50 text-emerald-700' : 'bg-purple-50 text-purple-700'}`}>
                         {disease.type === 'menular' ? 'Menular' : 'Tidak Menular'}
                       </span>
                     </div>
@@ -226,11 +220,11 @@ const Penyakit = () => {
             {pandemics.map((pandemic, index) => (
               <div
                 key={index}
-                className="bg-white rounded-xl border border-slate-100 hover:border-sky-200 transition-colors cursor-pointer"
+                className="bg-white rounded-xl border border-slate-100 hover:border-emerald-200 transition-colors cursor-pointer"
                 onClick={() => setExpandedPandemic(expandedPandemic === index ? null : index)}
               >
                 <div className="flex items-center gap-4 p-4 sm:p-5">
-                  <span className="w-9 h-9 rounded-lg bg-sky-500 text-white text-sm font-bold flex items-center justify-center flex-shrink-0">
+                  <span className="w-9 h-9 rounded-lg bg-emerald-500 text-white text-sm font-bold flex items-center justify-center flex-shrink-0">
                     {index + 1}
                   </span>
                   <div className="flex-1 min-w-0">
@@ -252,7 +246,7 @@ const Penyakit = () => {
                         href={pandemic.link}
                         target="_blank"
                         rel="noopener noreferrer"
-                        className="inline-flex items-center gap-1.5 text-xs font-medium text-sky-500 hover:text-sky-600 transition-colors"
+                        className="inline-flex items-center gap-1.5 text-xs font-medium text-emerald-500 hover:text-emerald-600 transition-colors"
                         onClick={(e) => e.stopPropagation()}
                       >
                         Pelajari Lebih Lanjut <ExternalLink className="w-3 h-3" />
@@ -269,12 +263,12 @@ const Penyakit = () => {
       {/* Help */}
       <section className="py-10 md:py-14">
         <div className="max-w-3xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex items-start gap-4 p-5 sm:p-6 rounded-xl border border-sky-100 bg-sky-50">
-            <MessageCircle className="w-6 h-6 text-sky-500 flex-shrink-0 mt-0.5" />
+          <div className="flex items-start gap-4 p-5 sm:p-6 rounded-xl border border-emerald-100 bg-emerald-50">
+            <MessageCircle className="w-6 h-6 text-emerald-500 flex-shrink-0 mt-0.5" />
             <div>
               <h3 className="text-sm font-semibold text-slate-700 mb-1">Memerlukan Informasi Lebih Lanjut?</h3>
               <p className="text-sm text-slate-500 leading-relaxed">
-                Jika Anda mencari informasi tentang penyakit lainnya atau ingin mengetahui lebih detail, jangan ragu untuk mengunjungi halaman <a href="/konsultasi" className="text-sky-500 hover:text-sky-600 font-medium underline">Konsultasi</a> untuk bertanya kepada chatbot AI kami.
+                Jika Anda mencari informasi tentang penyakit lainnya atau ingin mengetahui lebih detail, jangan ragu untuk mengunjungi halaman <a href="/konsultasi" className="text-emerald-500 hover:text-emerald-600 font-medium underline">Konsultasi</a> untuk bertanya kepada chatbot AI kami.
               </p>
             </div>
           </div>

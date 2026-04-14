@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
 import api from '../lib/api';
+import { isAdminRole } from '../lib/roles';
 import {
   Database, Brain, Cpu, FileText, Upload, Trash2, RefreshCw, Search,
   CheckCircle, XCircle, Loader2, ChevronDown, ChevronUp, Zap, Box,
@@ -15,7 +16,7 @@ function getAdminEmail(): string {
     const raw = localStorage.getItem('user');
     if (raw) {
       const u = JSON.parse(raw);
-      if (u.role === 'nurse') return u.email;
+      if (isAdminRole(u.role)) return u.email;
     }
   } catch { /* */ }
   return '';
@@ -23,9 +24,8 @@ function getAdminEmail(): string {
 
 function StatusBadge({ ok, label }: { ok: boolean; label?: string }) {
   return (
-    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${
-      ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
-    }`}>
+    <span className={`inline-flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold ${ok ? 'bg-emerald-50 text-emerald-700' : 'bg-red-50 text-red-600'
+      }`}>
       {ok ? <CheckCircle className="w-3 h-3" /> : <XCircle className="w-3 h-3" />}
       {label || (ok ? 'Aktif' : 'Tidak Aktif')}
     </span>
@@ -81,7 +81,7 @@ const RAGManagement = () => {
     const userData = localStorage.getItem('user');
     if (!userData) { navigate('/login'); return; }
     const user = JSON.parse(userData);
-    if (user.role !== 'nurse') { navigate('/'); return; }
+    if (!isAdminRole(user.role)) { navigate('/'); return; }
     loadData();
   }, [navigate]);
 
@@ -172,9 +172,8 @@ const RAGManagement = () => {
   }) => (
     <button
       onClick={() => toggleSection(id)}
-      className={`w-full flex items-center justify-between p-4 sm:p-5 hover:bg-slate-50/50 transition-colors rounded-t-xl ${
-        expandedSections[id] ? '' : 'rounded-b-xl'
-      }`}
+      className={`w-full flex items-center justify-between p-4 sm:p-5 hover:bg-slate-50/50 transition-colors rounded-t-xl ${expandedSections[id] ? '' : 'rounded-b-xl'
+        }`}
     >
       <div className="flex items-center gap-3">
         <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${color}`}>
@@ -195,7 +194,7 @@ const RAGManagement = () => {
     return (
       <Layout>
         <div className="flex items-center justify-center py-32">
-          <Loader2 className="w-8 h-8 animate-spin text-sky-500" />
+          <Loader2 className="w-8 h-8 animate-spin text-emerald-500" />
           <span className="ml-3 text-slate-500">Memuat informasi sistem...</span>
         </div>
       </Layout>
@@ -228,15 +227,14 @@ const RAGManagement = () => {
       <div className="max-w-5xl mx-auto px-4 py-8">
         {/* Header */}
         <div className="mb-8">
-          <h1 className="text-2xl sm:text-3xl font-bold text-slate-700 mb-2">Manajemen RAG & AI</h1>
-          <p className="text-slate-500 text-sm">Vector Database, Embedding Model, LLM, dan manajemen dokumen</p>
+          <h1 className="text-2xl sm:text-3xl font-bold text-slate-700 mb-2">RAG & AI</h1>
         </div>
 
         {/* Overview Stats */}
         <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 sm:gap-4 mb-6">
           {[
             { icon: Database, label: 'Vector Points', value: vdb.pointsCount ?? 0, color: 'text-violet-500 bg-violet-50' },
-            { icon: FileText, label: 'Dokumen', value: rag.totalDocuments ?? 0, color: 'text-sky-500 bg-sky-50' },
+            { icon: FileText, label: 'Dokumen', value: rag.totalDocuments ?? 0, color: 'text-emerald-500 bg-emerald-50' },
             { icon: Brain, label: 'Embedding Dim', value: `${emb.dimensions ?? 0}D`, color: 'text-amber-500 bg-amber-50' },
             { icon: Sparkles, label: 'LLM Status', value: llm.status === 'connected' ? 'Online' : 'Offline', color: 'text-emerald-500 bg-emerald-50' },
           ].map((s, i) => (
@@ -306,7 +304,7 @@ const RAGManagement = () => {
                 } />
               )}
               <InfoRow label="Source" value={
-                emb.source ? <a href={emb.source} target="_blank" rel="noreferrer" className="text-sky-500 hover:underline text-xs break-all">{emb.source}</a> : '-'
+                emb.source ? <a href={emb.source} target="_blank" rel="noreferrer" className="text-emerald-500 hover:underline text-xs break-all">{emb.source}</a> : '-'
               } />
             </div>
           )}
@@ -343,7 +341,7 @@ const RAGManagement = () => {
                 } />
               )}
               <InfoRow label="Source" value={
-                llm.source ? <a href={llm.source} target="_blank" rel="noreferrer" className="text-sky-500 hover:underline text-xs break-all">{llm.source}</a> : '-'
+                llm.source ? <a href={llm.source} target="_blank" rel="noreferrer" className="text-emerald-500 hover:underline text-xs break-all">{llm.source}</a> : '-'
               } />
             </div>
           )}
@@ -351,7 +349,7 @@ const RAGManagement = () => {
 
         {/* ══════════════ RAG PIPELINE ══════════════ */}
         <div className="bg-white border border-slate-100 rounded-xl mb-4 overflow-hidden">
-          <SectionHeader id="pipeline" icon={Layers} title="RAG Pipeline" subtitle="Retrieval Augmented Generation flow" color="bg-sky-50 text-sky-600" />
+          <SectionHeader id="pipeline" icon={Layers} title="RAG Pipeline" subtitle="Retrieval Augmented Generation flow" color="bg-emerald-50 text-emerald-600" />
           {expandedSections.pipeline && (
             <div className="px-4 sm:px-5 pb-5">
               <p className="text-sm text-slate-500 mb-4">{rag.description}</p>
@@ -360,7 +358,7 @@ const RAGManagement = () => {
               <div className="space-y-2">
                 {(rag.steps || []).map((step: any, i: number) => (
                   <div key={i} className="flex items-start gap-3 p-3 bg-slate-50 rounded-lg">
-                    <div className="w-7 h-7 rounded-full bg-sky-500 text-white flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">
+                    <div className="w-7 h-7 rounded-full bg-emerald-500 text-white flex items-center justify-center text-xs font-bold flex-shrink-0 mt-0.5">
                       {step.step}
                     </div>
                     <div>
@@ -397,7 +395,7 @@ const RAGManagement = () => {
                 <InfoRow label="Format Didukung" value={
                   <div className="flex flex-wrap gap-1.5">
                     {(rag.supportedFormats || []).map((f: string) => (
-                      <span key={f} className="px-2 py-0.5 bg-sky-50 text-sky-700 rounded text-xs font-mono">{f}</span>
+                      <span key={f} className="px-2 py-0.5 bg-emerald-50 text-emerald-700 rounded text-xs font-mono">{f}</span>
                     ))}
                   </div>
                 } />
@@ -417,7 +415,7 @@ const RAGManagement = () => {
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   disabled={uploading}
-                  className="inline-flex items-center gap-2 px-4 py-2 bg-sky-500 hover:bg-sky-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
+                  className="inline-flex items-center gap-2 px-4 py-2 bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50"
                 >
                   {uploading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
                   {uploading ? 'Mengupload...' : 'Upload Dokumen'}
@@ -538,11 +536,10 @@ const RAGManagement = () => {
                             <FileText className="w-3 h-3 inline mr-1" />
                             {r.source}
                           </span>
-                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${
-                            r.score >= 0.4 ? 'bg-emerald-100 text-emerald-700' :
+                          <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${r.score >= 0.4 ? 'bg-emerald-100 text-emerald-700' :
                             r.score >= 0.25 ? 'bg-amber-100 text-amber-700' :
-                            'bg-red-100 text-red-600'
-                          }`}>
+                              'bg-red-100 text-red-600'
+                            }`}>
                             Score: {r.score}
                           </span>
                         </div>

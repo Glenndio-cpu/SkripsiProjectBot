@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import Layout from '../components/layout/Layout';
 import {
   getBroadcastContacts,
@@ -9,13 +9,13 @@ import {
   type BroadcastContact
 } from '../lib/userBroadcast';
 import api from '../lib/api';
+import { publicInfo, publicLinks } from '../lib/publicInfo';
 import {
   FaDownload,
   FaCopy,
   FaWhatsapp,
   FaUsers,
   FaPhone,
-  FaEnvelope,
   FaPaperPlane,
   FaBroadcastTower,
   FaCheckCircle,
@@ -24,6 +24,7 @@ import {
   FaPlug,
 } from 'react-icons/fa';
 import { Info, Send, RefreshCw, MessageSquare, Loader2 } from 'lucide-react';
+import { isAdminRole, isHeadRole, isStaffRole } from '../lib/roles';
 
 interface BroadcastLog {
   id: number;
@@ -45,12 +46,23 @@ interface FonnteStatusData {
   device?: Record<string, unknown>;
 }
 
-function getAdminEmail(): string {
+function getActorEmail(): string {
   try {
     const raw = localStorage.getItem('user');
     if (raw) {
       const user = JSON.parse(raw);
-      if (user.role === 'nurse') return user.email;
+      if (isStaffRole(user.role)) return user.email;
+    }
+  } catch { /* ignore */ }
+  return '';
+}
+
+function getCurrentRole(): string {
+  try {
+    const raw = localStorage.getItem('user');
+    if (raw) {
+      const user = JSON.parse(raw);
+      return user.role || '';
     }
   } catch { /* ignore */ }
   return '';
@@ -61,7 +73,6 @@ const BroadcastManager = () => {
   const [stats, setStats] = useState({
     totalUsers: 0,
     usersWithPhone: 0,
-    usersWithoutPhone: 0,
     registrationRate: '0'
   });
   const [copySuccess, setCopySuccess] = useState(false);
@@ -85,10 +96,49 @@ const BroadcastManager = () => {
 
   // Active tab
   const [activeTab, setActiveTab] = useState<'broadcast' | 'individual' | 'contacts' | 'logs'>('broadcast');
+  const [currentRole, setCurrentRole] = useState<string>('');
 
-  const adminEmail = getAdminEmail();
+  const adminEmail = getActorEmail();
+  const canSendBroadcast = isHeadRole(currentRole) || isAdminRole(currentRole);
+  const isHeadBroadcaster = isHeadRole(currentRole);
+  const canSendIndividual = isAdminRole(currentRole);
+  const facilityName = publicInfo.name || 'Puskesmas';
+  const facilityTeamName = publicInfo.name ? `Tim ${publicInfo.name}` : 'Tim Layanan';
+  const facilityWebsiteLabel = publicLinks.website || publicInfo.website || '[website layanan]';
+
+  const broadcastPlaceholder = useMemo(() => {
+    return `Contoh:\n\nHalo {name}!\n\nIni adalah pemberitahuan dari ${facilityName}.\nJangan lupa jadwal imunisasi anak Anda minggu ini.\n\nTerima kasih.\n- ${facilityTeamName}`;
+  }, [facilityName, facilityTeamName]);
+
+  const quickTemplates = useMemo(() => {
+    return [
+      {
+        title: 'Pemberitahuan Jadwal',
+        text: `Halo {name}!\n\nIni pemberitahuan dari ${facilityName}.\nMohon untuk datang sesuai jadwal yang telah ditentukan.\n\nTerima kasih.\n- ${facilityTeamName}`,
+      },
+      {
+        title: 'Imunisasi Anak',
+        text: `Halo {name}!\n\nJangan lupa jadwal imunisasi anak Anda di ${facilityName}.\nPastikan membawa buku KIA.\n\nInfo lebih lanjut: ${facilityWebsiteLabel}\n\n- ${facilityTeamName}`,
+      },
+      {
+        title: 'Pengumuman Umum',
+        text: `Halo {name}!\n\n${facilityName} menginformasikan bahwa:\n[ISI PENGUMUMAN]\n\nUntuk informasi lengkap kunjungi ${facilityWebsiteLabel}\n\nTerima kasih.`,
+      },
+      {
+        title: 'Tips Kesehatan',
+        text: `Halo {name}!\n\nTips kesehatan dari ${facilityName}:\n\n- Jaga pola makan sehat\n- Olahraga teratur\n- Istirahat cukup\n- Minum air putih minimal 8 gelas/hari\n\nSehat bersama.`,
+      },
+    ];
+  }, [facilityName, facilityTeamName, facilityWebsiteLabel]);
 
   useEffect(() => {
+    const role = getCurrentRole();
+    setCurrentRole(role);
+    if (!isStaffRole(role)) {
+      window.location.href = '/';
+      return;
+    }
+
     loadData();
     checkFonnteStatus();
     loadLogs();
@@ -108,7 +158,8 @@ const BroadcastManager = () => {
       const data = await api.fonnteStatus(adminEmail);
       setFonnteStatus(data);
     } catch (err: unknown) {
-      setFonnteStatus({ connected: false, configured: false, message: String(err) });
+      const msg = err instanceof Error ? err.message : String(err);
+      setFonnteStatus({ connected: false, configured: false, message: msg });
     } finally {
       setStatusLoading(false);
     }
@@ -140,6 +191,11 @@ const BroadcastManager = () => {
 
   // Broadcast to all patients
   const handleBroadcast = async () => {
+    if (!canSendBroadcast) {
+      alert('Anda tidak memiliki akses untuk mengirim broadcast massal.');
+      return;
+    }
+
     if (!broadcastMsg.trim()) {
       alert('Pesan broadcast tidak boleh kosong!');
       return;
@@ -174,6 +230,11 @@ const BroadcastManager = () => {
 
   // Send individual
   const handleSendIndividual = async () => {
+    if (!canSendIndividual) {
+      alert('Fitur kirim pesan personal hanya untuk Admin IT Manager.');
+      return;
+    }
+
     if (!selectedContact || !individualMsg.trim()) {
       alert('Pilih kontak dan isi pesan!');
       return;
@@ -209,6 +270,19 @@ const BroadcastManager = () => {
     contact.email.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
+  const tabs: Array<{
+    key: 'broadcast' | 'individual' | 'contacts' | 'logs';
+    label: string;
+    icon: React.ReactNode;
+  }> = [
+    { key: 'broadcast', label: 'Broadcast Massal', icon: <FaBroadcastTower className="mr-2" /> },
+    ...(isAdminRole(currentRole)
+      ? [{ key: 'individual', label: 'Kirim Personal', icon: <FaPaperPlane className="mr-2" /> } as const]
+      : []),
+    { key: 'contacts', label: 'Daftar Kontak', icon: <FaUsers className="mr-2" /> },
+    { key: 'logs', label: 'Riwayat Kirim', icon: <FaHistory className="mr-2" /> },
+  ];
+
   return (
     <Layout>
       <div className="max-w-7xl mx-auto p-4 md:p-8">
@@ -216,37 +290,47 @@ const BroadcastManager = () => {
         <div className="mb-8">
           <h1 className="text-3xl font-bold text-slate-700 mb-2">
             <FaWhatsapp className="inline mr-2 text-green-600" />
-            Manajemen Broadcast WhatsApp
+            {isHeadBroadcaster ? 'Broadcast WA Resmi Kepala Puskesmas' : 'Manajemen Broadcast WhatsApp'}
           </h1>
           <p className="text-gray-600">
-            Kirim notifikasi kesehatan langsung via WhatsApp menggunakan Fonnte Gateway
+            {isHeadBroadcaster
+              ? 'Kepala Puskesmas dapat mengirim broadcast massal resmi, memantau status gateway, dan melihat riwayat pengiriman.'
+              : 'Kirim notifikasi kesehatan langsung via WhatsApp menggunakan Fonnte Gateway'}
           </p>
         </div>
 
+        {isHeadBroadcaster && (
+          <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+            Mode Kepala Puskesmas aktif. Pengiriman personal per pasien tetap dibatasi untuk Admin IT Manager.
+          </div>
+        )}
+
         {/* Fonnte Connection Status */}
-        <div className={`mb-6 rounded-lg p-4 border ${
-          fonnteStatus?.connected
-            ? 'bg-green-50 border-green-300'
-            : fonnteStatus?.configured
-              ? 'bg-yellow-50 border-yellow-300'
-              : 'bg-red-50 border-red-300'
-        }`}>
+        <div className={`mb-6 rounded-lg p-4 border ${fonnteStatus?.connected
+          ? 'bg-green-50 border-green-300'
+          : fonnteStatus?.configured
+            ? 'bg-yellow-50 border-yellow-300'
+            : 'bg-red-50 border-red-300'
+          }`}>
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
-              <FaPlug className={`text-xl ${
-                fonnteStatus?.connected ? 'text-green-600' : fonnteStatus?.configured ? 'text-yellow-600' : 'text-red-500'
-              }`} />
+              <FaPlug className={`text-xl ${fonnteStatus?.connected ? 'text-green-600' : fonnteStatus?.configured ? 'text-yellow-600' : 'text-red-500'
+                }`} />
               <div>
                 <p className="font-semibold text-sm">
                   Status Fonnte:{' '}
                   {statusLoading ? (
                     <span className="text-gray-500">Memeriksa...</span>
                   ) : fonnteStatus?.connected ? (
-                    <span className="text-green-700">Terhubung ✓</span>
+                    <span className="text-green-700">Terhubung</span>
                   ) : fonnteStatus?.configured ? (
                     <span className="text-yellow-700">Tidak Terhubung — {fonnteStatus.message || fonnteStatus.detail || 'Device mungkin offline'}</span>
                   ) : (
-                    <span className="text-red-700">Belum Dikonfigurasi — Tambahkan FONNTE_TOKEN di .env</span>
+                    <span className="text-red-700">
+                      {fonnteStatus?.message
+                        ? `Status tidak bisa dimuat — ${fonnteStatus.message}`
+                        : 'Belum Dikonfigurasi — Tambahkan FONNTE_TOKEN di .env'}
+                    </span>
                   )}
                 </p>
                 {fonnteStatus?.quota != null && (
@@ -266,7 +350,7 @@ const BroadcastManager = () => {
         </div>
 
         {/* Statistics Cards */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+        <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-8">
           <div className="bg-blue-50 rounded-lg p-6 border border-blue-200">
             <div className="flex items-center justify-between">
               <div>
@@ -285,15 +369,6 @@ const BroadcastManager = () => {
               <FaPhone className="text-4xl text-green-400" />
             </div>
           </div>
-          <div className="bg-yellow-50 rounded-lg p-6 border border-yellow-200">
-            <div className="flex items-center justify-between">
-              <div>
-                <p className="text-yellow-600 text-sm font-medium">Tanpa No. HP</p>
-                <p className="text-3xl font-bold text-yellow-800">{stats.usersWithoutPhone}</p>
-              </div>
-              <FaEnvelope className="text-4xl text-yellow-400" />
-            </div>
-          </div>
           <div className="bg-purple-50 rounded-lg p-6 border border-purple-200">
             <div className="flex items-center justify-between">
               <div>
@@ -307,20 +382,14 @@ const BroadcastManager = () => {
 
         {/* Tabs */}
         <div className="flex border-b border-gray-200 mb-6 overflow-x-auto">
-          {([
-            { key: 'broadcast', label: 'Broadcast Massal', icon: <FaBroadcastTower className="mr-2" /> },
-            { key: 'individual', label: 'Kirim Personal', icon: <FaPaperPlane className="mr-2" /> },
-            { key: 'contacts', label: 'Daftar Kontak', icon: <FaUsers className="mr-2" /> },
-            { key: 'logs', label: 'Riwayat Kirim', icon: <FaHistory className="mr-2" /> },
-          ] as const).map(tab => (
+          {tabs.map(tab => (
             <button
               key={tab.key}
               onClick={() => setActiveTab(tab.key)}
-              className={`flex items-center px-5 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                activeTab === tab.key
-                  ? 'border-green-600 text-green-700'
-                  : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
-              }`}
+              className={`flex items-center px-5 py-3 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${activeTab === tab.key
+                ? 'border-green-600 text-green-700'
+                : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+                }`}
             >
               {tab.icon}
               {tab.label}
@@ -350,7 +419,7 @@ const BroadcastManager = () => {
                     value={broadcastMsg}
                     onChange={(e) => setBroadcastMsg(e.target.value)}
                     rows={6}
-                    placeholder={`Contoh:\n\nHalo {name}! 👋\n\nIni adalah pemberitahuan dari Puskesmas Wori.\nJangan lupa jadwal imunisasi anak Anda minggu ini.\n\nTerima kasih! 🙏\n- Tim Puskesmas Wori`}
+                    placeholder={broadcastPlaceholder}
                     className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-green-500 focus:border-transparent outline-none resize-y"
                   />
                   <div className="flex justify-between mt-1">
@@ -377,7 +446,7 @@ const BroadcastManager = () => {
                 {/* Preview */}
                 {broadcastMsg && (
                   <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
-                    <p className="text-xs font-semibold text-gray-500 mb-2">📱 Preview Pesan:</p>
+                    <p className="text-xs font-semibold text-gray-500 mb-2">Preview Pesan:</p>
                     <div className="bg-green-100 rounded-lg p-3 text-sm text-gray-800 whitespace-pre-wrap max-w-md">
                       {broadcastMsg.replace(/\{name\}/g, 'John Doe')}
                     </div>
@@ -386,12 +455,11 @@ const BroadcastManager = () => {
 
                 <button
                   onClick={handleBroadcast}
-                  disabled={broadcasting || !broadcastMsg.trim() || !fonnteStatus?.configured}
-                  className={`flex items-center justify-center gap-2 px-6 py-3 rounded-lg text-white font-medium transition-colors w-full md:w-auto ${
-                    broadcasting || !broadcastMsg.trim() || !fonnteStatus?.configured
-                      ? 'bg-gray-400 cursor-not-allowed'
-                      : 'bg-green-600 hover:bg-green-700'
-                  }`}
+                  disabled={!canSendBroadcast || broadcasting || !broadcastMsg.trim() || !fonnteStatus?.configured}
+                  className={`flex items-center justify-center gap-2 px-6 py-3 rounded-lg text-white font-medium transition-colors w-full md:w-auto ${!canSendBroadcast || broadcasting || !broadcastMsg.trim() || !fonnteStatus?.configured
+                    ? 'bg-gray-400 cursor-not-allowed'
+                    : 'bg-green-600 hover:bg-green-700'
+                    }`}
                 >
                   {broadcasting ? (
                     <>
@@ -406,23 +474,22 @@ const BroadcastManager = () => {
                   )}
                 </button>
 
-                {!fonnteStatus?.configured && (
+                {!fonnteStatus?.configured && !fonnteStatus?.message && (
                   <p className="text-sm text-red-600">
-                    ⚠️ Fonnte belum dikonfigurasi. Tambahkan FONNTE_TOKEN di .env.
+                    Fonnte belum dikonfigurasi. Tambahkan FONNTE_TOKEN di .env.
                   </p>
                 )}
 
                 {fonnteStatus?.configured && !fonnteStatus?.connected && (
                   <p className="text-sm text-yellow-600">
-                    ⚠️ Device Fonnte sedang offline. Pesan tetap akan diantrekan dan terkirim saat device kembali online.
+                    Device Fonnte sedang offline. Pesan tetap akan diantrekan dan terkirim saat device kembali online.
                   </p>
                 )}
 
                 {/* Result */}
                 {broadcastResult && (
-                  <div className={`p-4 rounded-lg border ${
-                    broadcastResult.success ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300'
-                  }`}>
+                  <div className={`p-4 rounded-lg border ${broadcastResult.success ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300'
+                    }`}>
                     <div className="flex items-center gap-2">
                       {broadcastResult.success ? (
                         <FaCheckCircle className="text-green-600 text-lg" />
@@ -445,26 +512,9 @@ const BroadcastManager = () => {
 
             {/* Quick Templates */}
             <div className="bg-white rounded-lg shadow-sm p-6">
-              <h3 className="text-lg font-semibold text-gray-800 mb-3">📝 Template Cepat</h3>
+              <h3 className="text-lg font-semibold text-gray-800 mb-3">Template Cepat</h3>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                {[
-                  {
-                    title: 'Pemberitahuan Jadwal',
-                    text: 'Halo {name}! 👋\n\nIni pemberitahuan dari Puskesmas Wori.\nMohon untuk datang sesuai jadwal yang telah ditentukan.\n\nTerima kasih! 🙏\n- Tim Puskesmas Wori',
-                  },
-                  {
-                    title: 'Imunisasi Anak',
-                    text: 'Halo {name}! 💉\n\nJangan lupa jadwal imunisasi anak Anda di Puskesmas Wori.\nPastikan membawa buku KIA.\n\nInfo lebih lanjut: https://woricare.online\n\n- Tim Puskesmas Wori',
-                  },
-                  {
-                    title: 'Pengumuman Umum',
-                    text: 'Halo {name}! 📢\n\nPuskesmas Wori menginformasikan bahwa:\n[ISI PENGUMUMAN]\n\nUntuk informasi lengkap kunjungi https://woricare.online\n\nTerima kasih! 🙏',
-                  },
-                  {
-                    title: 'Tips Kesehatan',
-                    text: 'Halo {name}! 🏥\n\nTips kesehatan dari Puskesmas Wori:\n\n✅ Jaga pola makan sehat\n✅ Olahraga teratur\n✅ Istirahat cukup\n✅ Minum air putih minimal 8 gelas/hari\n\nSehat bersama! 💪',
-                  },
-                ].map((tpl, i) => (
+                {quickTemplates.map((tpl, i) => (
                   <button
                     key={i}
                     onClick={() => setBroadcastMsg(tpl.text)}
@@ -534,12 +584,11 @@ const BroadcastManager = () => {
 
               <button
                 onClick={handleSendIndividual}
-                disabled={sendingIndividual || !selectedContact || !individualMsg.trim() || !fonnteStatus?.configured}
-                className={`flex items-center justify-center gap-2 px-6 py-3 rounded-lg text-white font-medium transition-colors ${
-                  sendingIndividual || !selectedContact || !individualMsg.trim() || !fonnteStatus?.configured
-                    ? 'bg-gray-400 cursor-not-allowed'
-                    : 'bg-green-600 hover:bg-green-700'
-                }`}
+                disabled={!canSendIndividual || sendingIndividual || !selectedContact || !individualMsg.trim() || !fonnteStatus?.configured}
+                className={`flex items-center justify-center gap-2 px-6 py-3 rounded-lg text-white font-medium transition-colors ${!canSendIndividual || sendingIndividual || !selectedContact || !individualMsg.trim() || !fonnteStatus?.configured
+                  ? 'bg-gray-400 cursor-not-allowed'
+                  : 'bg-green-600 hover:bg-green-700'
+                  }`}
               >
                 {sendingIndividual ? (
                   <>
@@ -555,9 +604,8 @@ const BroadcastManager = () => {
               </button>
 
               {individualResult && (
-                <div className={`mt-4 p-4 rounded-lg border ${
-                  individualResult.success ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300'
-                }`}>
+                <div className={`mt-4 p-4 rounded-lg border ${individualResult.success ? 'bg-green-50 border-green-300' : 'bg-red-50 border-red-300'
+                  }`}>
                   <div className="flex items-center gap-2">
                     {individualResult.success ? (
                       <FaCheckCircle className="text-green-600" />
@@ -585,18 +633,17 @@ const BroadcastManager = () => {
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <button
                   onClick={handleDownloadCSV}
-                  className="flex items-center justify-center gap-3 bg-sky-500 text-white px-6 py-3 rounded-lg hover:bg-sky-600 transition-colors"
+                  className="flex items-center justify-center gap-3 bg-emerald-500 text-white px-6 py-3 rounded-lg hover:bg-emerald-600 transition-colors"
                 >
                   <FaDownload />
                   Download File CSV
                 </button>
                 <button
                   onClick={handleCopyPhones}
-                  className={`flex items-center justify-center gap-3 px-6 py-3 rounded-lg transition-colors ${
-                    copySuccess
-                      ? 'bg-green-600 text-white'
-                      : 'bg-gray-600 text-white hover:bg-gray-700'
-                  }`}
+                  className={`flex items-center justify-center gap-3 px-6 py-3 rounded-lg transition-colors ${copySuccess
+                    ? 'bg-green-600 text-white'
+                    : 'bg-gray-600 text-white hover:bg-gray-700'
+                    }`}
                 >
                   <FaCopy />
                   {copySuccess ? ' Tersalin!' : 'Copy Semua Nomor'}
@@ -612,7 +659,7 @@ const BroadcastManager = () => {
                   placeholder="Cari nama, nomor HP, atau email..."
                   value={searchTerm}
                   onChange={(e) => setSearchTerm(e.target.value)}
-                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-sky-500 focus:border-transparent outline-none"
+                  className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none"
                 />
               </div>
 
@@ -652,10 +699,14 @@ const BroadcastManager = () => {
                                 setActiveTab('individual');
                                 setIndividualResult(null);
                               }}
-                              className="text-xs px-3 py-1 bg-green-100 text-green-700 rounded-full hover:bg-green-200 transition-colors flex items-center gap-1"
+                              disabled={!isAdminRole(currentRole)}
+                              className={`text-xs px-3 py-1 rounded-full transition-colors flex items-center gap-1 ${isAdminRole(currentRole)
+                                ? 'bg-green-100 text-green-700 hover:bg-green-200'
+                                : 'bg-gray-100 text-gray-400 cursor-not-allowed'
+                                }`}
                             >
                               <FaPaperPlane className="text-[10px]" />
-                              Kirim
+                              {isAdminRole(currentRole) ? 'Kirim' : 'Monitor'}
                             </button>
                           </td>
                         </tr>
@@ -704,11 +755,10 @@ const BroadcastManager = () => {
             ) : logs.length > 0 ? (
               <div className="space-y-3">
                 {logs.map(log => (
-                  <div key={log.id} className={`border rounded-lg p-4 ${
-                    log.status === 'sent' ? 'border-green-200 bg-green-50/50' :
+                  <div key={log.id} className={`border rounded-lg p-4 ${log.status === 'sent' ? 'border-green-200 bg-green-50/50' :
                     log.status === 'partial' ? 'border-yellow-200 bg-yellow-50/50' :
-                    'border-red-200 bg-red-50/50'
-                  }`}>
+                      'border-red-200 bg-red-50/50'
+                    }`}>
                     <div className="flex items-start justify-between">
                       <div className="flex-1">
                         <div className="flex items-center gap-2 mb-1">
@@ -717,11 +767,10 @@ const BroadcastManager = () => {
                           ) : (
                             <FaTimesCircle className="text-red-600 text-sm" />
                           )}
-                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${
-                            log.status === 'sent' ? 'bg-green-200 text-green-800' :
+                          <span className={`text-xs font-semibold px-2 py-0.5 rounded-full ${log.status === 'sent' ? 'bg-green-200 text-green-800' :
                             log.status === 'partial' ? 'bg-yellow-200 text-yellow-800' :
-                            'bg-red-200 text-red-800'
-                          }`}>
+                              'bg-red-200 text-red-800'
+                            }`}>
                             {log.status === 'sent' ? 'Terkirim' : log.status === 'partial' ? 'Sebagian' : 'Gagal'}
                           </span>
                           <span className="text-xs text-gray-500">
@@ -752,7 +801,7 @@ const BroadcastManager = () => {
             <strong><Info className="w-4 h-4 inline mr-1" /> Informasi Penting:</strong>
           </p>
           <ul className="text-sm text-yellow-700 mt-2 space-y-1">
-            <li>• Data nomor telepon hanya untuk keperluan broadcast informasi kesehatan Puskesmas Wori</li>
+            <li>• Data nomor telepon hanya untuk keperluan broadcast informasi kesehatan {facilityName}</li>
             <li>• Pastikan pesan broadcast bermanfaat dan tidak spam</li>
             <li>• Gunakan delay antar pesan (2-5 detik) untuk menghindari blokir WhatsApp</li>
             <li>• Hormati privasi user dengan tidak membagikan data ke pihak ketiga</li>
