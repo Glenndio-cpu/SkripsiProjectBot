@@ -1,4 +1,5 @@
 import api from './api';
+import { isMonitorRole } from './roles';
 
 export interface UserData {
   email: string;
@@ -17,14 +18,14 @@ export interface BroadcastContact {
 }
 
 /**
- * Get admin email from localStorage session
+ * Get monitor role email from localStorage session
  */
-function getAdminEmail(): string | undefined {
+function getMonitorEmail(): string | undefined {
   try {
     const raw = localStorage.getItem('user');
     if (raw) {
       const user = JSON.parse(raw);
-      if (user.role === 'nurse') return user.email;
+      if (isMonitorRole(user.role)) return user.email;
     }
   } catch { /* ignore */ }
   return undefined;
@@ -32,8 +33,8 @@ function getAdminEmail(): string | undefined {
 
 export async function getAllUsers(): Promise<UserData[]> {
   try {
-    const adminEmail = getAdminEmail();
-    const data = await api.getUsers(adminEmail);
+    const monitorEmail = getMonitorEmail();
+    const data = await api.getUsers(monitorEmail);
     return data.users || [];
   } catch (error) {
     console.error('Error loading users:', error);
@@ -48,8 +49,8 @@ export async function getAllPhoneNumbers(): Promise<string[]> {
 
 export async function getBroadcastContacts(): Promise<BroadcastContact[]> {
   try {
-    const adminEmail = getAdminEmail();
-    const data = await api.getContacts(adminEmail);
+    const monitorEmail = getMonitorEmail();
+    const data = await api.getContacts(monitorEmail);
     return data.contacts || [];
   } catch (error) {
     console.error('Error loading contacts:', error);
@@ -111,7 +112,6 @@ export async function getUserStats() {
   return {
     totalUsers: users.length,
     usersWithPhone: usersWithPhone.length,
-    usersWithoutPhone: users.length - usersWithPhone.length,
     registrationRate: users.length > 0
       ? ((usersWithPhone.length / users.length) * 100).toFixed(1)
       : '0'

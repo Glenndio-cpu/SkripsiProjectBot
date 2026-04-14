@@ -3,6 +3,7 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { FaClinicMedical, FaUser, FaSignOutAlt } from "react-icons/fa";
 import { Megaphone, ChevronDown, LogIn, UserPlus, Menu, X } from 'lucide-react';
 import api from '../../lib/api';
+import { isAdminRole, isHeadRole, isStaffRole, roleLabel } from '../../lib/roles';
 
 interface HeaderProps {
   onMenuToggle?: () => void;
@@ -21,7 +22,18 @@ const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
     const updateUser = () => {
       const userData = localStorage.getItem('user');
       if (userData) {
-        setUser(JSON.parse(userData));
+        try {
+          const parsed = JSON.parse(userData);
+          if (parsed?.role === 'public') {
+            localStorage.removeItem('user');
+            setUser(null);
+            return;
+          }
+          setUser(parsed);
+        } catch {
+          localStorage.removeItem('user');
+          setUser(null);
+        }
       } else {
         setUser(null);
       }
@@ -64,31 +76,49 @@ const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
   };
 
   // Nav links for desktop – adjust based on role
-  const isNurse = user?.role === 'nurse';
-  const navLinks = isNurse
-    ? [
+  const isStaff = isStaffRole(user?.role);
+  const isHead = isHeadRole(user?.role);
+  const isAdmin = isAdminRole(user?.role);
+  const navLinks = isStaff
+    ? (isHead
+      ? [
         { to: '/', label: 'Beranda' },
         { to: '/admin/dashboard', label: 'Dashboard' },
-        { to: '/admin/patients', label: 'Kelola Pasien' },
-        { to: '/admin/rag', label: 'Kelola AI' },
-        { to: '/admin/announcements', label: 'Pengumuman' },
-        { to: '/kontak', label: 'Kontak' },
+        { to: '/admin/patients', label: 'Data Pasien' },
+        { to: '/admin/schedules', label: 'Jadwal Berobat/Posyandu' },
+        { to: '/admin/announcements', label: 'Validasi Informasi' },
+        { to: '/admin/broadcast', label: 'Broadcast WA Resmi' },
       ]
+      : isAdmin
+        ? [
+          { to: '/', label: 'Beranda' },
+          { to: '/admin/dashboard', label: 'Dashboard' },
+          { to: '/admin/users', label: 'Manajemen User' },
+          { to: '/admin/register', label: 'Tambah Staf' },
+          { to: '/admin/ai', label: 'Kelola dan Konfigurasi AI' },
+          { to: '/admin/broadcast', label: 'WA Gateway' },
+        ]
+        : [
+          { to: '/', label: 'Beranda' },
+          { to: '/admin/dashboard', label: 'Dashboard' },
+          { to: '/admin/schedules', label: 'Jadwal Berobat/Posyandu' },
+          { to: '/admin/announcements', label: 'Informasi Kesehatan' },
+        ])
     : [
-        { to: '/', label: 'Beranda' },
-        { to: '/tentang', label: 'Tentang' },
-        { to: '/penyakit', label: 'Info Penyakit' },
-        { to: '/konsultasi', label: 'Konsultasi' },
-        { to: '/kontak', label: 'Kontak' },
-      ];
+      { to: '/', label: 'Beranda' },
+      { to: '/tentang', label: 'Tentang' },
+      { to: '/informasi', label: 'Informasi' },
+      { to: '/konsultasi', label: 'Konsultasi' },
+      { to: '/jadwal-berobat', label: 'Jadwal Berobat' },
+      { to: '/kontak', label: 'Kontak' },
+    ];
 
   const isActive = (path: string) => location.pathname === path;
 
   return (
     <header
-      className={`sticky top-0 z-40 bg-white/95 backdrop-blur-md border-b transition-shadow duration-300 ${
-        scrolled ? 'shadow-md border-gray-200/80' : 'shadow-none border-gray-100'
-      }`}
+      className={`sticky top-0 z-40 bg-white/90 backdrop-blur-xl border-b transition-shadow duration-300 ${scrolled ? 'shadow-md shadow-emerald-100/50 border-emerald-100/80' : 'shadow-none border-emerald-50'
+        }`}
     >
       <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
         <div className="flex justify-between items-center h-16 lg:h-[4.25rem]">
@@ -99,7 +129,7 @@ const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
             {onMenuToggle && (
               <button
                 onClick={onMenuToggle}
-                className="lg:hidden p-2 -ml-2 rounded-lg text-slate-500 hover:text-sky-500 hover:bg-slate-50 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                className="lg:hidden p-2 -ml-2 rounded-lg text-slate-500 hover:text-emerald-600 hover:bg-emerald-50 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-emerald-200"
                 aria-label={sidebarOpen ? 'Tutup menu' : 'Buka menu'}
               >
                 {sidebarOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
@@ -108,11 +138,11 @@ const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
 
             {/* Logo */}
             <Link to="/" className="flex items-center gap-2.5 flex-shrink-0 group">
-              <div className="w-9 h-9 bg-sky-500 rounded-xl flex items-center justify-center">
+              <div className="w-9 h-9 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-xl flex items-center justify-center shadow-sm shadow-emerald-200/70">
                 <FaClinicMedical className="text-white text-base" />
               </div>
               <span className="text-lg sm:text-xl font-bold text-slate-700 tracking-tight">
-                Puskesmas Wori <span className="hidden sm:inline text-sky-500">Online</span>
+                Puskesmas Wori <span className="hidden sm:inline text-emerald-600">Online</span>
               </span>
             </Link>
           </div>
@@ -123,15 +153,14 @@ const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
               <Link
                 key={link.to}
                 to={link.to}
-                className={`relative px-3.5 py-2 text-sm font-medium rounded-lg transition-colors duration-200 ${
-                  isActive(link.to)
-                    ? 'text-sky-600 bg-sky-50'
-                    : 'text-slate-600 hover:text-sky-600 hover:bg-slate-50'
-                }`}
+                className={`relative px-3.5 py-2 text-sm font-medium rounded-lg transition-colors duration-200 ${isActive(link.to)
+                  ? 'text-emerald-700 bg-emerald-50'
+                  : 'text-slate-600 hover:text-emerald-700 hover:bg-emerald-50/70'
+                  }`}
               >
                 {link.label}
                 {isActive(link.to) && (
-                  <span className="absolute bottom-0 left-3 right-3 h-0.5 bg-sky-500 rounded-full" />
+                  <span className="absolute bottom-0 left-3 right-3 h-0.5 bg-emerald-500 rounded-full" />
                 )}
               </Link>
             ))}
@@ -143,16 +172,16 @@ const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
               <div className="relative" ref={dropdownRef}>
                 <button
                   onClick={() => setIsDropdownOpen(!isDropdownOpen)}
-                  className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl hover:bg-slate-50 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-sky-200"
+                  className="flex items-center gap-2.5 px-3 py-1.5 rounded-xl hover:bg-emerald-50 transition-colors duration-200 focus:outline-none focus:ring-2 focus:ring-emerald-200"
                 >
                   {user.profileImage ? (
                     <img
                       src={user.profileImage}
                       alt="Profile"
-                      className="w-8 h-8 rounded-full object-cover ring-2 ring-sky-100"
+                      className="w-8 h-8 rounded-full object-cover ring-2 ring-emerald-100"
                     />
                   ) : (
-                    <div className="w-8 h-8 bg-sky-500 rounded-full flex items-center justify-center text-white text-sm font-semibold">
+                    <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-full flex items-center justify-center text-white text-sm font-semibold">
                       {user.name.charAt(0).toUpperCase()}
                     </div>
                   )}
@@ -167,24 +196,23 @@ const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
                     <div className="px-4 py-2.5 border-b border-gray-100">
                       <p className="text-sm font-semibold text-gray-800 truncate">{user.name}</p>
                       <p className="text-xs text-gray-500 truncate">{user.email}</p>
-                      <span className={`inline-block mt-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full ${
-                        user.role === 'nurse'
-                          ? 'bg-emerald-100 text-emerald-700'
-                          : 'bg-sky-100 text-sky-700'
-                      }`}>
-                        {user.role === 'nurse' ? 'Admin' : 'Pasien'}
+                      <span className={`inline-block mt-1 text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full ${isStaffRole(user.role)
+                        ? 'bg-emerald-100 text-emerald-700'
+                        : 'bg-teal-100 text-teal-700'
+                        }`}>
+                        {roleLabel(user.role)}
                       </span>
                     </div>
 
-                    {user?.role === 'nurse' && (
+                    {(isAdminRole(user?.role) || isHeadRole(user?.role)) && (
                       <>
                         <Link
                           to="/admin/broadcast"
                           onClick={() => setIsDropdownOpen(false)}
-                          className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-600 transition-colors"
+                          className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 transition-colors"
                         >
                           <Megaphone className="w-4 h-4" />
-                          Broadcast Manager
+                          WA Gateway
                         </Link>
                         <div className="h-px bg-gray-100 mx-3" />
                       </>
@@ -192,9 +220,9 @@ const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
                     <Link
                       to="/profile"
                       onClick={() => setIsDropdownOpen(false)}
-                      className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-sky-50 hover:text-sky-600 transition-colors"
+                      className="flex items-center gap-3 px-4 py-2.5 text-sm text-slate-700 hover:bg-emerald-50 hover:text-emerald-700 transition-colors"
                     >
-                      <FaUser className="text-sky-500" />
+                      <FaUser className="text-emerald-600" />
                       Akun Saya
                     </Link>
                     <div className="h-px bg-gray-100 mx-3" />
@@ -212,14 +240,14 @@ const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
               <div className="flex items-center gap-2">
                 <Link
                   to="/login"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-slate-600 hover:text-sky-600 hover:bg-slate-50 rounded-lg transition-colors duration-200"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-slate-600 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors duration-200"
                 >
                   <LogIn className="w-4 h-4" />
                   Login
                 </Link>
                 <Link
                   to="/register"
-                  className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-sky-500 hover:bg-sky-600 rounded-lg transition-colors duration-200"
+                  className="inline-flex items-center gap-1.5 px-4 py-2 text-sm font-medium text-white bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-600 hover:to-teal-700 rounded-lg transition-colors duration-200"
                 >
                   <UserPlus className="w-4 h-4" />
                   Mendaftar

@@ -5,44 +5,44 @@
 
 @layer base {
   :root {
-    --background: 0 0% 100%;
-    --foreground: 215 25% 27%;
+    --background: 156 33% 97%;
+    --foreground: 172 19% 18%;
 
     --card: 0 0% 100%;
-    --card-foreground: 215 25% 27%;
+    --card-foreground: 172 19% 18%;
 
     --popover: 0 0% 100%;
-    --popover-foreground: 215 25% 27%;
+    --popover-foreground: 172 19% 18%;
 
-    --primary: 199 89% 48%;
+    --primary: 163 67% 37%;
     --primary-foreground: 0 0% 100%;
 
-    --secondary: 199 95% 93%;
-    --secondary-foreground: 215 25% 27%;
+    --secondary: 156 42% 93%;
+    --secondary-foreground: 172 19% 18%;
 
-    --muted: 210 40% 96.1%;
-    --muted-foreground: 215 16% 47%;
+    --muted: 156 25% 93%;
+    --muted-foreground: 172 11% 42%;
 
-    --accent: 199 95% 93%;
-    --accent-foreground: 215 25% 27%;
+    --accent: 168 44% 91%;
+    --accent-foreground: 172 19% 18%;
 
     --destructive: 0 84.2% 60.2%;
     --destructive-foreground: 0 0% 100%;
 
-    --border: 214.3 31.8% 91.4%;
-    --input: 214.3 31.8% 91.4%;
-    --ring: 199 89% 48%;
+    --border: 158 24% 86%;
+    --input: 158 24% 86%;
+    --ring: 163 67% 37%;
 
-    --radius: 0.5rem;
+    --radius: 0.8rem;
 
     --sidebar-background: 0 0% 100%;
-    --sidebar-foreground: 215 25% 27%;
-    --sidebar-primary: 199 89% 48%;
+    --sidebar-foreground: 172 19% 18%;
+    --sidebar-primary: 163 67% 37%;
     --sidebar-primary-foreground: 0 0% 100%;
-    --sidebar-accent: 199 95% 93%;
-    --sidebar-accent-foreground: 215 25% 27%;
-    --sidebar-border: 214 32% 91%;
-    --sidebar-ring: 199 89% 48%;
+    --sidebar-accent: 156 42% 93%;
+    --sidebar-accent-foreground: 172 19% 18%;
+    --sidebar-border: 158 24% 86%;
+    --sidebar-ring: 163 67% 37%;
   }
 
   .dark {
@@ -92,11 +92,24 @@
 
   body {
     @apply bg-background text-foreground;
+    font-family: "Plus Jakarta Sans", "Segoe UI", sans-serif;
+    background-image:
+      radial-gradient(circle at 10% 8%, rgba(16, 185, 129, 0.12), transparent 30%),
+      radial-gradient(circle at 88% -4%, rgba(20, 184, 166, 0.1), transparent 30%),
+      radial-gradient(circle at 50% 120%, rgba(16, 185, 129, 0.08), transparent 44%),
+      linear-gradient(180deg, #f6fcf9 0%, #f8fbfa 50%, #f3f8f6 100%);
+    min-height: 100vh;
   }
 
   /* Enable smooth scrolling globally */
   html {
     scroll-behavior: smooth;
+  }
+}
+
+@layer base {
+  ::selection {
+    background: rgba(16, 185, 129, 0.25);
   }
 }
 
@@ -156,5 +169,31 @@
   .scrollbar-hide {
     -ms-overflow-style: none;
     scrollbar-width: none;
+  }
+}
+
+@layer components {
+  .figma-card {
+    @apply rounded-2xl border border-emerald-100/90 bg-white/95 shadow-md shadow-emerald-100/40;
+  }
+
+  .figma-heading {
+    @apply text-2xl font-bold text-slate-800 sm:text-3xl;
+  }
+
+  .figma-caption {
+    @apply text-sm text-slate-500;
+  }
+
+  .figma-input {
+    @apply w-full rounded-xl border border-emerald-200 bg-emerald-50/40 px-3.5 py-2.5 text-sm text-slate-700 outline-none transition-colors placeholder:text-slate-400 focus:border-transparent focus:ring-2 focus:ring-emerald-300;
+  }
+
+  .figma-btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl bg-gradient-to-r from-emerald-500 to-teal-600 px-4 py-2.5 text-sm font-medium text-white transition-colors hover:from-emerald-600 hover:to-teal-700;
+  }
+
+  .figma-btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-50;
   }
 }

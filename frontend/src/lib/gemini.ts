@@ -1,4 +1,5 @@
 import api from './api';
+import { ROLE_PATIENT } from './roles';
 
 export interface ChatMessage {
   role: "user" | "assistant";
@@ -8,24 +9,28 @@ export interface ChatMessage {
 export type ChatMode = "public" | "consultation";
 
 /**
- * Deteksi apakah user sudah login
+ * Deteksi apakah user login sebagai pasien
  */
-function isLoggedIn(): boolean {
+function isPatientLoggedIn(): boolean {
   try {
-    return !!localStorage.getItem("user");
+    const raw = localStorage.getItem("user");
+    if (!raw) return false;
+    const parsed = JSON.parse(raw);
+    return parsed?.role === ROLE_PATIENT && typeof parsed?.email === 'string' && parsed.email.trim() !== '';
   } catch {
     return false;
   }
 }
 
 /**
- * Ambil email user yang sedang login
+ * Ambil email pasien yang sedang login
  */
 function getLoggedInEmail(): string | undefined {
   try {
     const raw = localStorage.getItem("user");
     if (raw) {
       const user = JSON.parse(raw);
+      if (user?.role !== ROLE_PATIENT) return undefined;
       return user.email || undefined;
     }
   } catch {
@@ -41,7 +46,7 @@ export async function getGeminiResponse(
   messages: ChatMessage[],
   mode?: ChatMode
 ): Promise<string> {
-  const chatMode = mode || (isLoggedIn() ? "consultation" : "public");
+  const chatMode = mode || (isPatientLoggedIn() ? "consultation" : "public");
   const email = getLoggedInEmail();
   try {
     const data = await api.chat(

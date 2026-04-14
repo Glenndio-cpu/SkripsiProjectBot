@@ -12,12 +12,12 @@ interface Announcement {
 
 const typeConfig = {
   info: {
-    bg: 'bg-sky-50 border-sky-200',
-    text: 'text-sky-800',
-    subtext: 'text-sky-600',
+    bg: 'bg-emerald-50 border-emerald-200',
+    text: 'text-emerald-800',
+    subtext: 'text-emerald-600',
     icon: Info,
-    iconColor: 'text-sky-500',
-    dot: 'bg-sky-500',
+    iconColor: 'text-emerald-500',
+    dot: 'bg-emerald-500',
   },
   warning: {
     bg: 'bg-amber-50 border-amber-200',

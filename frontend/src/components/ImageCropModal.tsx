@@ -200,7 +200,7 @@ const ImageCropModal: React.FC<ImageCropModalProps> = ({
           </button>
           <button
             onClick={handleCrop}
-            className="px-6 py-2 bg-sky-500 text-white rounded-lg hover:bg-slate-600 transition-colors"
+            className="px-6 py-2 bg-emerald-500 text-white rounded-lg hover:bg-slate-600 transition-colors"
           >
             Crop & Simpan
           </button>
