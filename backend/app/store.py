@@ -1,6 +1,7 @@
 """Data-access layer – mirrors the old Node store.js exactly."""
 
 import re
+import difflib
 from datetime import datetime, date
 from app.db import query, execute
 
@@ -9,24 +10,57 @@ from app.db import query, execute
 
 def get_users():
     return query(
-        'SELECT email, name, phone, ktp, password, profile_image AS profileImage, '
+        'SELECT email, name, phone, ktp, gender, age, medical_history AS medicalHistory, '
+        'password, profile_image AS profileImage, '
         'role, created_at AS createdAt FROM users ORDER BY created_at DESC'
     )
 
 
 def find_user_by_email(email):
+    normalized = (email or '').strip().lower()
     rows = query(
-        'SELECT email, name, phone, ktp, password, profile_image AS profileImage, '
-        'role, created_at AS createdAt FROM users WHERE email = %s',
-        (email,),
+        'SELECT email, name, phone, ktp, gender, age, medical_history AS medicalHistory, '
+        'password, profile_image AS profileImage, '
+        'role, created_at AS createdAt FROM users WHERE LOWER(TRIM(email)) = %s',
+        (normalized,),
     )
     return rows[0] if rows else None
+
+
+def suggest_similar_email(email):
+    normalized = (email or '').strip().lower()
+    if '@' not in normalized:
+        return None
+
+    local, domain = normalized.split('@', 1)
+    if not local or not domain:
+        return None
+
+    # Keep the candidate set small by matching same domain first.
+    candidates = query(
+        'SELECT email FROM users WHERE LOWER(TRIM(email)) LIKE %s LIMIT 50',
+        (f'%@{domain}',),
+    )
+
+    if not candidates:
+        return None
+
+    normalized_to_original = {
+        (c.get('email') or '').strip().lower(): c.get('email')
+        for c in candidates
+        if c.get('email')
+    }
+    close = difflib.get_close_matches(normalized, list(normalized_to_original.keys()), n=1, cutoff=0.82)
+    if not close:
+        return None
+    return normalized_to_original.get(close[0])
 
 
 def find_user_by_phone(phone):
     clean = re.sub(r'[\s\-\(\)]', '', phone)
     rows = query(
-        'SELECT email, name, phone, ktp, password, profile_image AS profileImage, '
+        'SELECT email, name, phone, ktp, gender, age, medical_history AS medicalHistory, '
+        'password, profile_image AS profileImage, '
         'role, created_at AS createdAt FROM users WHERE phone = %s',
         (clean,),
     )
@@ -35,7 +69,8 @@ def find_user_by_phone(phone):
 
 def find_user_by_ktp(ktp):
     rows = query(
-        'SELECT email, name, phone, ktp, password, profile_image AS profileImage, '
+        'SELECT email, name, phone, ktp, gender, age, medical_history AS medicalHistory, '
+        'password, profile_image AS profileImage, '
         'role, created_at AS createdAt FROM users WHERE ktp = %s',
         (ktp,),
     )
@@ -46,12 +81,19 @@ def add_user(user: dict):
     created = user.get('createdAt') or datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
     if isinstance(created, str) and 'T' in created:
         created = created[:19].replace('T', ' ')
+
+    gender = user.get('gender') or None
+    age = user.get('age')
+    medical_history = user.get('medicalHistory')
+
     execute(
-        'INSERT INTO users (email, name, phone, ktp, password, profile_image, role, created_at) '
-        'VALUES (%s, %s, %s, %s, %s, %s, %s, %s)',
+        'INSERT INTO users '
+        '(email, name, phone, ktp, gender, age, medical_history, password, profile_image, role, created_at) '
+        'VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)',
         (
             user['email'], user['name'], user.get('phone', ''),
-            user.get('ktp') or None, user['password'], user.get('profileImage', ''),
+            user.get('ktp') or None, gender, age, medical_history,
+            user['password'], user.get('profileImage', ''),
             user.get('role', 'patient'), created,
         ),
     )
@@ -67,6 +109,12 @@ def update_user(email, updates: dict):
         fields.append('phone = %s'); values.append(updates['phone'])
     if 'ktp' in updates:
         fields.append('ktp = %s'); values.append(updates['ktp'] or None)
+    if 'gender' in updates:
+        fields.append('gender = %s'); values.append(updates['gender'] or None)
+    if 'age' in updates:
+        fields.append('age = %s'); values.append(updates['age'])
+    if 'medicalHistory' in updates:
+        fields.append('medical_history = %s'); values.append(updates['medicalHistory'] or None)
     if 'password' in updates:
         fields.append('password = %s'); values.append(updates['password'])
     if 'profileImage' in updates:
@@ -100,9 +148,6 @@ def get_user_activity(email):
         consultation_count = rows[0]['consultationCount'] or 0
         last_updated = rows[0].get('lastUpdated')
 
-    articles = query('SELECT article_id FROM articles_read WHERE email = %s', (email,))
-    articles_read = [a['article_id'] for a in articles]
-
     days = query(
         'SELECT DATE_FORMAT(active_date, "%%Y-%%m-%%d") AS d FROM active_days WHERE email = %s',
         (email,),
@@ -112,7 +157,6 @@ def get_user_activity(email):
     return {
         'email': email,
         'consultationCount': consultation_count,
-        'articlesRead': articles_read,
         'activeDays': active_days,
         'lastUpdated': last_updated.isoformat() if hasattr(last_updated, 'isoformat') else last_updated,
     }
@@ -125,12 +169,6 @@ def update_user_activity(email, updates: dict):
             'INSERT INTO activities (email, consultation_count, last_updated) VALUES (%s, %s, NOW()) '
             'ON DUPLICATE KEY UPDATE consultation_count = %s, last_updated = NOW()',
             (email, c, c),
-        )
-
-    for aid in (updates.get('articlesRead') or []):
-        execute(
-            'INSERT IGNORE INTO articles_read (email, article_id) VALUES (%s, %s)',
-            (email, aid),
         )
 
     for day in (updates.get('activeDays') or []):

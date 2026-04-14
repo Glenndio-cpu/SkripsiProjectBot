@@ -1,54 +1,45 @@
 """Chat routes – POST /api/chat  &  GET /api/chat/status
 
 Integrated with:
-- RAG (Retrieval Augmented Generation) for consultation mode
+- RAG (Retrieval Augmented Generation) for all chat modes
 - Chat history persistence to MySQL
 """
 
-import os, re
+import os
 from flask import Blueprint, request, jsonify
 import google.generativeai as genai
+from app.session_auth import get_authenticated_user
+from app.roles import ROLE_PATIENT
 
 chat_bp = Blueprint('chat', __name__)
 
 MODEL_NAME = 'gemini-2.5-flash-lite'
 
-# ── System prompts (identical to old Node backend) ────────────────────────
+# ── System prompts ─────────────────────────────────────────────────────────
 
-PUBLIC_SYSTEM_PROMPT = """Anda adalah asisten informasi Puskesmas Wori Online.
+PUBLIC_SYSTEM_PROMPT = """Anda adalah asisten AI yang membantu pengguna dengan pertanyaan umum.
 
 TUGAS ANDA:
-- Menjawab pertanyaan tentang informasi Puskesmas Wori
-- Memberikan informasi jam layanan, alamat, lokasi, dan rute
-- Menjelaskan cara menggunakan website/aplikasi
-- Informasi kontak dan WhatsApp Puskesmas
-- Informasi biaya, administrasi, dan persyaratan layanan
-- Layanan yang tersedia di Puskesmas
-- Alur pendaftaran dan antrian
-- Jadwal imunisasi dan vaksinasi
-- Cara membuat akun, login, dan register
+- Menjawab pertanyaan pengguna secara jelas dan relevan
+- Memberikan penjelasan ringkas, terstruktur, dan mudah dipahami
+- Jika tersedia konteks referensi, gunakan sebagai sumber utama
+- Jika tidak ada konteks relevan, tetap bantu dengan pengetahuan umum yang aman
 
 BATASAN ANDA:
-- JANGAN memberikan konsultasi medis
-- JANGAN mendiagnosis penyakit atau gejala
-- JANGAN memberikan rekomendasi obat
-- JANGAN menjawab pertanyaan tentang penyakit spesifik
-- Jika ditanya tentang kesehatan/penyakit, minta user untuk login terlebih dahulu
-
-RESPONS SAAT DITANYA MEDIS:
-"Untuk konsultasi medis dan informasi penyakit, silakan login terlebih dahulu. Saat ini saya hanya dapat membantu dengan informasi umum Puskesmas seperti jam layanan, lokasi, pendaftaran, kontak, dan jadwal imunisasi."
+- JANGAN mengarang fakta atau sumber
+- JANGAN memberikan diagnosis medis pasti
+- JANGAN meresepkan obat spesifik atau dosis
+- Untuk kondisi gawat darurat, sarankan segera menghubungi tenaga kesehatan
 
 GAYA KOMUNIKASI:
 - Ramah dan sopan
 - Singkat dan jelas
 - Bahasa Indonesia yang baik"""
 
-CONSULTATION_SYSTEM_PROMPT = """Anda adalah Chatbot Pendamping Puskesmas Desa Wori yang ahli dalam kesehatan dan pencegahan penyakit menular.
+CONSULTATION_SYSTEM_PROMPT = """Anda adalah asisten pendamping kesehatan yang membantu edukasi kesehatan secara aman.
 
 IDENTITAS ANDA:
-- Jika ditanya "Siapa Anda?" atau "Apa itu chatbot ini?", jawab: "Saya adalah Chatbot Pendamping Puskesmas Desa Wori"
-- JANGAN PERNAH menyebut diri sebagai "Asisten Virtual" atau "AI Assistant"
-- SELALU gunakan identitas "Chatbot Pendamping Puskesmas Desa Wori"
+- Jika ditanya "Siapa Anda?" atau "Apa itu chatbot ini?", jawab bahwa Anda adalah asisten pendamping kesehatan.
 
 PERAN ANDA:
 - Memberikan informasi tentang penyakit menular (influenza, TB, demam berdarah, COVID-19, ISPA, dll)
@@ -72,56 +63,12 @@ FOKUS UTAMA:
 - Pencegahan penyakit menular
 - Edukasi kesehatan masyarakat
 - Promosi pola hidup sehat
-- Informasi layanan Puskesmas Wori
+- Informasi layanan kesehatan yang relevan
 
 CONTOH JAWABAN:
 Jika ditanya "Siapa Anda?", jawab:
-"Saya adalah Chatbot Pendamping Puskesmas Desa Wori, di sini untuk membantu Anda dengan informasi kesehatan, pencegahan penyakit menular, dan layanan Puskesmas Wori.\""""
-
-# ── Public-mode topic filter ──────────────────────────────────────────────
-
-_GREETINGS = [
-    re.compile(
-        r'^(halo|hai|hi|hello|hey|selamat\s+(pagi|siang|sore|malam)|assalamu|'
-        r'apa\s+kabar|permisi|terima\s+kasih|makasih|ok|oke|ya|iya|tidak|baik|siapa)',
-        re.I,
-    )
-]
-
-_ALLOWED = [
-    re.compile(p, re.I) for p in [
-        r'jam|buka|tutup|operasional',
-        r'lokasi|alamat|rute|maps|arah',
-        r'kontak|telepon|whats?app|wa|hubungi',
-        r'layanan|fitur|fasilitas',
-        r'pendaftaran|daftar|antrian|booking',
-        r'jadwal|vaksin|imunisasi',
-        r'biaya|gratis|administrasi|tarif',
-        r'akun|login|register|daftar\s+akun|masuk',
-        r'privasi|syarat|ketentuan',
-        r'cara\s+pakai|cara\s+gunakan|tutorial',
-    ]
-]
-
-_BLOCKED = [
-    re.compile(p, re.I) for p in [
-        r'gejala|diagnos|sakit',
-        r'obat|dosis|resep|medicine',
-        r'penyakit|flu|demam|dbd|covid|asma|batuk|pilek|diare|muntah',
-        r'hipertensi|diabetes|kanker|jantung|stroke',
-        r'tb|malaria|hiv|aids|hepatitis',
-        r'alergi|sesak|pusing|nyeri|lemas',
-    ]
-]
-
-
-def _is_public_allowed(text: str) -> bool:
-    t = text.strip()
-    if any(rx.search(t) for rx in _GREETINGS):
-        return True
-    if any(rx.search(t) for rx in _BLOCKED):
-        return False
-    return any(rx.search(t) for rx in _ALLOWED)
+"Saya adalah asisten pendamping kesehatan, di sini untuk membantu Anda dengan informasi kesehatan dan pencegahan penyakit menular."
+"""
 
 
 # ── Routes ────────────────────────────────────────────────────────────────
@@ -130,42 +77,59 @@ def _is_public_allowed(text: str) -> bool:
 def chat():
     body = request.get_json(silent=True) or {}
     messages = body.get('messages')
-    mode = body.get('mode', 'public')
-    user_email = body.get('email', '')
+    requested_mode = body.get('mode', 'public')
+
+    session_user = get_authenticated_user()
+    is_logged_in = session_user is not None
+    user_email = (session_user or {}).get('email', '')
+    user_role = (session_user or {}).get('role')
+    is_patient_session = bool(user_email and user_role == ROLE_PATIENT)
+
+    # Guests are always limited to public mode.
+    if not is_logged_in:
+        mode = 'public'
+    else:
+        mode = requested_mode if requested_mode in ('public', 'consultation') else 'consultation'
+
+    can_persist_history = is_patient_session and mode == 'consultation'
 
     if not messages or not isinstance(messages, list) or len(messages) == 0:
         return jsonify(error='Messages array is required'), 400
 
     api_key = os.getenv('GEMINI_API_KEY', '')
     if not api_key or api_key == 'your_gemini_api_key_here':
-        phone = os.getenv('PUSKESMAS_PHONE', '+62 896-5739-8733')
-        email_addr = os.getenv('PUSKESMAS_EMAIL', 'puskesmas.desawori@gmail.com')
-        addr = os.getenv('PUSKESMAS_ADDRESS', 'Puskesmas Wori')
+        phone = (os.getenv('PUSKESMAS_PHONE') or '').strip()
+        email_addr = (os.getenv('PUSKESMAS_EMAIL') or '').strip()
+        addr = (os.getenv('PUSKESMAS_ADDRESS') or '').strip()
+
+        support_lines = []
+        if phone:
+            support_lines.append(f'- Telepon/WhatsApp: {phone}')
+        if email_addr:
+            support_lines.append(f'- Email: {email_addr}')
+        if addr:
+            support_lines.append(f'- Alamat: {addr}')
+
+        support_block = (
+            '**Untuk sementara, Anda dapat menghubungi:**\n' + '\n'.join(support_lines)
+            if support_lines
+            else 'Silakan hubungi administrator sistem untuk informasi kontak layanan.'
+        )
+
         return jsonify(
             error='Chatbot belum dikonfigurasi',
             response=(
                 f'**Chatbot Belum Dikonfigurasi**\n\n'
                 f'Maaf, layanan chatbot AI belum dikonfigurasi dengan benar.\n\n'
-                f'**Untuk sementara, Anda dapat:**\n'
-                f'- Hubungi: {phone} (WhatsApp)\n'
-                f'- Email: {email_addr}\n'
-                f'- Kunjungi: {addr}'
+                f'{support_block}'
             ),
         ), 503
 
     last_msg = messages[-1]
     user_text = last_msg.get('content', '')
 
-    # Public mode: reject medical questions
-    if mode == 'public' and not _is_public_allowed(user_text):
-        return jsonify(
-            response='Untuk konsultasi medis dan informasi penyakit, silakan login terlebih dahulu. '
-                     'Saat ini saya hanya dapat membantu dengan informasi umum Puskesmas seperti '
-                     'jam layanan, lokasi, pendaftaran, kontak, dan jadwal imunisasi.'
-        )
-
-    # Save user message to history
-    if user_email:
+    # Save messages only for authenticated sessions.
+    if can_persist_history:
         try:
             from app.chat_history import save_message
             save_message(user_email, 'user', user_text, mode)
@@ -175,23 +139,31 @@ def chat():
     try:
         genai.configure(api_key=api_key)
 
-        # RAG: retrieve context for consultation mode
+        # RAG: retrieve context from Qdrant for every mode
         rag_context = ''
-        if mode == 'consultation':
-            try:
-                from app.rag import build_rag_context
-                rag_context = build_rag_context(user_text)
-            except Exception as e:
-                print(f'RAG retrieval error (non-fatal): {e}')
+        try:
+            from app.rag import build_rag_context
+            rag_context = build_rag_context(user_text)
+        except Exception as e:
+            print(f'RAG retrieval error (non-fatal): {e}')
 
         # Build system prompt with RAG context
         if mode == 'public':
             system_prompt = PUBLIC_SYSTEM_PROMPT
+            if rag_context:
+                system_prompt += (
+                    '\n\nBERIKUT ADALAH INFORMASI REFERENSI DARI BASIS KNOWLEDGE QDRANT.\n'
+                    'Gunakan informasi ini untuk menjawab pertanyaan pengguna jika relevan. '
+                    'Jika informasi tidak relevan dengan pertanyaan, abaikan saja.\n\n'
+                    '--- MULAI REFERENSI ---\n'
+                    f'{rag_context}\n'
+                    '--- AKHIR REFERENSI ---'
+                )
         else:
             system_prompt = CONSULTATION_SYSTEM_PROMPT
             if rag_context:
                 system_prompt += (
-                    '\n\nBERIKUT ADALAH INFORMASI REFERENSI DARI DOKUMEN PUSKESMAS WORI.\n'
+                    '\n\nBERIKUT ADALAH INFORMASI REFERENSI DARI BASIS KNOWLEDGE QDRANT.\n'
                     'Gunakan informasi ini untuk menjawab pertanyaan pengguna jika relevan. '
                     'Jika informasi tidak relevan dengan pertanyaan, abaikan saja.\n\n'
                     '--- MULAI REFERENSI ---\n'
@@ -221,7 +193,7 @@ def chat():
         response_text = result.text
 
         # Save assistant response to history
-        if user_email:
+        if can_persist_history:
             try:
                 from app.chat_history import save_message
                 save_message(user_email, 'assistant', response_text, mode)

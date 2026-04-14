@@ -3,6 +3,7 @@
 from flask import Blueprint, request, jsonify
 from app.chat_history import get_history, clear_history, get_history_count
 from app.role_guard import require_email_match_or_roles
+from app.roles import MONITOR_ROLES
 
 history_bp = Blueprint('chat_history', __name__)
 
@@ -10,7 +11,7 @@ history_bp = Blueprint('chat_history', __name__)
 # ── GET /api/chat/history/<email> ─────────────────────────────────────────
 
 @history_bp.route('/<email>', methods=['GET'])
-@require_email_match_or_roles('nurse', source='path', field='email')
+@require_email_match_or_roles(*MONITOR_ROLES, source='path', field='email')
 def load_history(email):
     mode = request.args.get('mode', 'consultation')
     limit = request.args.get('limit', 50, type=int)
@@ -25,7 +26,7 @@ def load_history(email):
 # ── DELETE /api/chat/history/<email> ──────────────────────────────────────
 
 @history_bp.route('/<email>', methods=['DELETE'])
-@require_email_match_or_roles('nurse', source='path', field='email')
+@require_email_match_or_roles(*MONITOR_ROLES, source='path', field='email')
 def delete_history(email):
     mode = request.args.get('mode')
     try:
@@ -39,7 +40,7 @@ def delete_history(email):
 # ── GET /api/chat/history/count/<email> ───────────────────────────────────
 
 @history_bp.route('/count/<email>', methods=['GET'])
-@require_email_match_or_roles('nurse', source='path', field='email')
+@require_email_match_or_roles(*MONITOR_ROLES, source='path', field='email')
 def history_count(email):
     try:
         counts = get_history_count(email)

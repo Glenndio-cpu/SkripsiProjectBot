@@ -44,6 +44,6 @@ def execute(sql, params=None):
 try:
     conn = get_connection()
     conn.close()
-    print(f"✅ MySQL connected to database: {os.getenv('DB_NAME', 'puskesbot')}")
+    print(f"MySQL connected to database: {os.getenv('DB_NAME', 'puskesbot')}")
 except Exception as e:
-    print(f"❌ MySQL connection failed: {e}")
+    print(f"MySQL connection failed: {e}")

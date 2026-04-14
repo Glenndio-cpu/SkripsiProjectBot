@@ -10,6 +10,20 @@ load_dotenv(ENV_FILE, override=True)
 
 from app.migration_health import get_migration_health
 
+
+def _get_cors_origins():
+    raw = (os.getenv('CORS_ALLOWED_ORIGINS') or '').strip()
+    if raw:
+        origins = [origin.strip() for origin in raw.split(',') if origin.strip()]
+        if origins:
+            return origins
+
+    # Safe default for local development.
+    return [
+        'http://localhost:4000',
+        'http://localhost:5173',
+    ]
+
 def create_app():
     app = Flask(__name__)
 
@@ -34,16 +48,7 @@ def create_app():
             session.modified = True
 
     # CORS
-    CORS(app, origins=[
-        'http://103.162.115.123',
-        'http://103.162.115.123:4000',
-        'http://woricare.online',
-        'https://woricare.online',
-        'http://www.woricare.online',
-        'https://www.woricare.online',
-        'http://localhost:4000',
-        'http://localhost:5173',
-    ], supports_credentials=True)
+    CORS(app, origins=_get_cors_origins(), supports_credentials=True)
 
     # Register blueprints
     from app.routes.chat import chat_bp

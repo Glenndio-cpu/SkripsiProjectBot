@@ -1,6 +1,6 @@
 """Auth routes – /api/auth/*"""
 
-import os, re
+import re
 from flask import Blueprint, request, jsonify
 import bcrypt as _bcrypt
 
@@ -8,6 +8,7 @@ from app.store import (
     find_user_by_email,
     find_user_by_phone,
     find_user_by_ktp,
+    suggest_similar_email,
     add_user,
     update_user,
     delete_user,
@@ -19,10 +20,13 @@ from app.session_auth import (
     logout_session,
 )
 from app.role_guard import require_auth, require_email_match_or_roles
+from app.roles import ROLE_ADMIN, ROLE_PATIENT, STAFF_ROLES
 
 auth_bp = Blueprint('auth', __name__)
 
 KTP_RE = re.compile(r'^\d{16}$')
+PHONE_RE = re.compile(r'^\d{10,15}$')
+ALLOWED_GENDERS = {'male', 'female', 'other'}
 
 
 def _hash_password(plain: str) -> str:
@@ -51,6 +55,8 @@ def _serialize_user(u: dict) -> dict:
 
 
 # ── POST /api/auth/register ──────────────────────────────────────────────
+# Public registration is PATIENT ONLY.
+# Staff accounts (admin, head, nurse) must be created by admin via POST /api/users
 
 @auth_bp.route('/register', methods=['POST'])
 def register():
@@ -60,9 +66,15 @@ def register():
         email = body.get('email', '').strip()
         phone = body.get('phone', '').strip()
         password = body.get('password', '')
-        role = body.get('role', 'patient')
-        admin_code = body.get('adminAccessCode', '')
         ktp = (body.get('ktp') or '').strip()
+        gender = (body.get('gender') or '').strip().lower()
+        medical_history = (body.get('medicalHistory') or '').strip()
+        raw_age = body.get('age')
+        requested_role = (body.get('role') or ROLE_PATIENT).strip()
+
+        # ENFORCE: Public registration is PATIENT only
+        if requested_role != ROLE_PATIENT:
+            return jsonify(error='Pendaftaran publik hanya untuk pasien. Hubungi admin atau kepala puskesmas untuk mendaftarkan akun staf.'), 403
 
         if not name or not email or not password:
             return jsonify(error='Nama, email, dan password harus diisi'), 400
@@ -70,26 +82,34 @@ def register():
         if find_user_by_email(email):
             return jsonify(error='Email sudah terdaftar'), 409
 
-        if phone:
-            clean_phone = re.sub(r'[\s\-\(\)]', '', phone)
-            if find_user_by_phone(clean_phone):
-                return jsonify(error='Nomor telepon sudah terdaftar'), 409
-        else:
-            clean_phone = ''
+        clean_phone = re.sub(r'[\s\-\(\)\+]', '', phone)
+        if not clean_phone:
+            return jsonify(error='Nomor WhatsApp pasien wajib diisi untuk menerima broadcast'), 400
+        if not PHONE_RE.match(clean_phone):
+            return jsonify(error='Nomor WhatsApp tidak valid (10-15 digit angka)'), 400
+        if find_user_by_phone(clean_phone):
+            return jsonify(error='Nomor telepon sudah terdaftar'), 409
 
         normalized_ktp = ''
-        if role == 'patient':
-            normalized_ktp = re.sub(r'\D', '', ktp)
-            if not KTP_RE.match(normalized_ktp):
-                return jsonify(error='KTP pasien harus 16 digit angka'), 400
-            if find_user_by_ktp(normalized_ktp):
-                return jsonify(error='Nomor KTP sudah terdaftar'), 409
+        normalized_ktp = re.sub(r'\D', '', ktp)
+        if not KTP_RE.match(normalized_ktp):
+            return jsonify(error='KTP pasien harus 16 digit angka'), 400
+        if find_user_by_ktp(normalized_ktp):
+            return jsonify(error='Nomor KTP sudah terdaftar'), 409
 
-        # Admin access code
-        if role == 'nurse':
-            valid_code = os.getenv('ADMIN_ACCESS_CODE', 'your_admin_code_here')
-            if not admin_code or admin_code != valid_code:
-                return jsonify(error='Kode akses admin tidak valid'), 403
+        if gender not in ALLOWED_GENDERS:
+            return jsonify(error='Gender pasien wajib dipilih'), 400
+
+        try:
+            age = int(raw_age)
+        except (TypeError, ValueError):
+            return jsonify(error='Umur pasien harus berupa angka'), 400
+
+        if age < 1 or age > 120:
+            return jsonify(error='Umur pasien harus di antara 1 sampai 120 tahun'), 400
+
+        if not medical_history:
+            return jsonify(error='Keluhan atau riwayat penyakit wajib diisi'), 400
 
         from datetime import datetime
         user = {
@@ -97,9 +117,12 @@ def register():
             'name': name,
             'phone': clean_phone,
             'ktp': normalized_ktp or None,
+            'gender': gender,
+            'age': age,
+            'medicalHistory': medical_history,
             'password': _hash_password(password),
             'profileImage': '',
-            'role': role,
+            'role': ROLE_PATIENT,
             'createdAt': datetime.utcnow().isoformat(),
         }
 
@@ -120,7 +143,7 @@ def login():
         body = request.get_json(silent=True) or {}
         identifier = (body.get('identifier') or '').strip()
         password = body.get('password', '')
-        selected_role = body.get('role', 'patient')
+        selected_role = body.get('role', ROLE_PATIENT)
 
         if not identifier or not password:
             return jsonify(error='Semua field harus diisi'), 400
@@ -134,20 +157,23 @@ def login():
             user = find_user_by_email(identifier)
 
         if not user:
+            suggested_email = None if is_phone else suggest_similar_email(identifier)
             msg = ('Nomor telepon tidak terdaftar! Silakan daftar terlebih dahulu.'
                    if is_phone else
                    'Email tidak terdaftar! Silakan daftar terlebih dahulu.')
+            if suggested_email:
+                msg = f'Email tidak terdaftar. Apakah maksud Anda "{suggested_email}"?'
             return jsonify(error=msg), 404
 
         if not _check_password(password, user['password']):
             return jsonify(error='Anda memasukkan password yang salah!'), 401
 
-        user_role = user.get('role') or 'patient'
+        user_role = user.get('role') or ROLE_PATIENT
 
-        if selected_role == 'nurse' and user_role != 'nurse':
-            return jsonify(error='Akun ini bukan akun Admin. Pilih "Login sebagai pasien" atau hubungi admin.'), 403
-        if selected_role == 'patient' and user_role == 'nurse':
-            return jsonify(error='Akun ini terdaftar sebagai Admin. Pilih "Login sebagai Admin".'), 403
+        if selected_role == ROLE_ADMIN and user_role not in STAFF_ROLES:
+            return jsonify(error='Akun ini bukan akun staf. Pilih "Login sebagai Pasien".'), 403
+        if selected_role == ROLE_PATIENT and user_role in STAFF_ROLES:
+            return jsonify(error='Akun ini terdaftar sebagai staf. Pilih "Login sebagai Admin/Staf".'), 403
 
         login_session(user)
         return jsonify(message='Login berhasil', user=_serialize_user(user))
@@ -194,7 +220,7 @@ def change_password():
 
 @auth_bp.route('/delete-account', methods=['POST'])
 @require_auth
-@require_email_match_or_roles('nurse', source='json', field='email')
+@require_email_match_or_roles(*STAFF_ROLES, source='json', field='email')
 def delete_account():
     try:
         body = request.get_json(silent=True) or {}
