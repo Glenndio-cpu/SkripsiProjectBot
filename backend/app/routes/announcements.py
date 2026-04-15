@@ -8,6 +8,7 @@ from app.db import execute, query
 from app.role_guard import require_roles
 from app.roles import ROLE_HEAD, ROLE_NURSE, ROLE_PATIENT
 from app.session_auth import get_authenticated_user
+from datetime import datetime, timedelta
 
 announcements_bp = Blueprint('announcements', __name__)
 
@@ -28,7 +29,9 @@ def _to_iso(value):
     if hasattr(value, 'isoformat'):
         return value.isoformat()
     return value
-
+    if isinstance(value, timedelta):
+        return str(value)
+    return value
 
 def _normalize_category(raw_value):
     if not raw_value:

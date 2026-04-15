@@ -26,7 +26,7 @@ auth_bp = Blueprint('auth', __name__)
 
 KTP_RE = re.compile(r'^\d{16}$')
 PHONE_RE = re.compile(r'^\d{10,15}$')
-ALLOWED_GENDERS = {'male', 'female', 'other'}
+ALLOWED_GENDERS = {'male', 'female'}
 
 
 def _hash_password(plain: str) -> str:

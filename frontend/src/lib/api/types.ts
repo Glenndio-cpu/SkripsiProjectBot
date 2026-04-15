@@ -11,7 +11,7 @@ export interface RegisterPayload {
     email: string;
     phone?: string;
     ktp?: string;
-    gender: 'male' | 'female' | 'other';
+    gender: 'male' | 'female';
     age: number;
     medicalHistory: string;
     password: string;

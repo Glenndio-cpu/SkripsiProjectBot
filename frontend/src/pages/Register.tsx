@@ -40,7 +40,7 @@ const Register = () => {
       return;
     }
 
-    if (!['male', 'female', 'other'].includes(formData.gender)) {
+    if (!['male', 'female'].includes(formData.gender)) {
       setError('Gender pasien wajib dipilih');
       return;
     }
@@ -98,7 +98,7 @@ const Register = () => {
         email: formData.email,
         phone: cleanPhone,
         ktp: cleanKtp,
-        gender: formData.gender as 'male' | 'female' | 'other',
+        gender: formData.gender as 'male' | 'female',
         age: parsedAge,
         medicalHistory: normalizedMedicalHistory,
         password: formData.password,
@@ -230,10 +230,9 @@ const Register = () => {
                   className="w-full px-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-emerald-500 focus:border-transparent outline-none transition bg-white"
                   required
                 >
-                  <option value="">Pilih gender</option>
+                  <option value="" disabled hidden />
                   <option value="male">Laki-laki</option>
                   <option value="female">Perempuan</option>
-                  <option value="other">Lainnya</option>
                 </select>
               </div>
 
