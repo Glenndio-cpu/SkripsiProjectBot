@@ -5,22 +5,95 @@ import AnnouncementBanner from '../components/AnnouncementBanner';
 import { Pill, Apple, Activity, MessageCircle, ArrowRight, Stethoscope, Users, CheckCircle, Clock, Shield, Sparkles, Home, Info, Phone, CalendarDays, Megaphone } from 'lucide-react';
 import { Carousel, CarouselContent, CarouselItem, CarouselNext, CarouselPrevious } from '@/components/ui/carousel';
 
-const heroGallery = [
+type HeroImage = {
+  sources: string[];
+  alt: string;
+};
+
+type ResolvedHeroImage = {
+  src: string;
+  alt: string;
+};
+
+const heroGallery: HeroImage[] = [
   {
-    src: '/gallery/puskesmas-wori-1.jpg',
+    sources: [
+      '/gallery/puskesmas-wori-1.jpg',
+      '/gallery/Puskesmas-wori-1.jpg',
+    ],
     alt: 'Puskesmas Wori tampak depan',
   },
   {
-    src: '/gallery/puskesmas-wori-2.jpg',
+    sources: [
+      '/gallery/puskesmas-wori-2.jpg',
+      '/gallery/Puskesmas-wori-2.jpg',
+    ],
     alt: 'Area depan Puskesmas Wori',
   },
   {
-    src: '/gallery/puskesmas-wori-3.png',
+    sources: [
+      '/gallery/Gedung puskesmas wori.jpg',
+      '/gallery/Gedung puskesmas wori.jpeg',
+      '/gallery/Gedung puskesmas wori.png',
+      '/gallery/gedung puskesmas wori.jpg',
+      '/gallery/gedung puskesmas wori.jpeg',
+      '/gallery/gedung puskesmas wori.png',
+      '/gallery/puskesmas-wori-3.png',
+      '/gallery/puskesmas-wori-3.jpg',
+      '/gallery/puskesmas-wori-3.jpeg',
+    ],
     alt: 'Gedung Puskesmas Wori',
   },
 ];
 
+const resolveFirstAvailableSource = async (sources: string[]): Promise<string | null> => {
+  for (const source of sources) {
+    const isLoaded = await new Promise<boolean>((resolve) => {
+      const img = new Image();
+      img.onload = () => resolve(true);
+      img.onerror = () => resolve(false);
+      img.src = source;
+    });
+
+    if (isLoaded) {
+      return source;
+    }
+  }
+
+  return null;
+};
+
 const Index = () => {
+  const [visibleHeroGallery, setVisibleHeroGallery] = React.useState<ResolvedHeroImage[]>([]);
+
+  React.useEffect(() => {
+    let isActive = true;
+
+    const resolveGallery = async () => {
+      const resolvedImages = await Promise.all(
+        heroGallery.map(async (image) => {
+          const source = await resolveFirstAvailableSource(image.sources);
+          if (!source) {
+            return null;
+          }
+          return { src: source, alt: image.alt };
+        })
+      );
+
+      if (isActive) {
+        setVisibleHeroGallery(
+          resolvedImages.filter((image): image is ResolvedHeroImage => image !== null)
+        );
+      }
+    };
+
+    void resolveGallery();
+
+    return () => {
+      isActive = false;
+    };
+  }, []);
+
   return (
     <Layout>
       {/* Announcement Banner */}
@@ -55,24 +128,26 @@ const Index = () => {
           </div>
           <div className="flex justify-center order-1 lg:order-2">
             <div className="w-full max-w-sm sm:max-w-md lg:max-w-lg">
-              <Carousel opts={{ loop: true }} className="w-full">
-                <CarouselContent>
-                  {heroGallery.map((image) => (
-                    <CarouselItem key={image.src}>
-                      <div className="overflow-hidden rounded-2xl shadow-lg border border-slate-100 bg-white">
-                        <img
-                          src={image.src}
-                          alt={image.alt}
-                          className="w-full h-[240px] sm:h-[300px] lg:h-[360px] object-cover"
-                          loading="lazy"
-                        />
-                      </div>
-                    </CarouselItem>
-                  ))}
-                </CarouselContent>
-                <CarouselPrevious className="left-2 md:left-3 bg-white/90 border-slate-200 hover:bg-white" />
-                <CarouselNext className="right-2 md:right-3 bg-white/90 border-slate-200 hover:bg-white" />
-              </Carousel>
+              {visibleHeroGallery.length > 0 && (
+                <Carousel opts={{ loop: true }} className="w-full">
+                  <CarouselContent>
+                    {visibleHeroGallery.map((image) => (
+                      <CarouselItem key={image.alt}>
+                        <div className="overflow-hidden rounded-2xl shadow-lg border border-slate-100 bg-white">
+                          <img
+                            src={image.src}
+                            alt={image.alt}
+                            className="w-full h-[240px] sm:h-[300px] lg:h-[360px] object-cover"
+                            loading="lazy"
+                          />
+                        </div>
+                      </CarouselItem>
+                    ))}
+                  </CarouselContent>
+                  <CarouselPrevious className="left-2 md:left-3 bg-white/90 border-slate-200 hover:bg-white" />
+                  <CarouselNext className="right-2 md:right-3 bg-white/90 border-slate-200 hover:bg-white" />
+                </Carousel>
+              )}
             </div>
           </div>
         </div>
