@@ -19,10 +19,15 @@ import BroadcastManager from "./pages/BroadcastManager";
 import AdminDashboard from "./pages/AdminDashboard";
 import PatientManagement from "./pages/PatientManagement";
 import UserManagement from "./pages/UserManagement";
-import AdminRegister from "./pages/AdminRegister";
 import RAGManagement from "./pages/RAGManagement";
+import DatabaseManagement from "./pages/DatabaseManagement";
 import AnnouncementManagement from "./pages/AnnouncementManagement";
 import ScheduleManagement from "./pages/ScheduleManagement";
+import ApprovalInformasi from "./pages/ApprovalInformasi";
+import ApprovalWaiting from "./pages/ApprovalWaiting";
+import PendingApprovals from "./pages/PendingApprovals";
+import SyaratKetentuan from "./pages/SyaratKetentuan";
+import KebijakanPrivasi from "./pages/KebijakanPrivasi";
 import ProtectedRoute from "./components/ProtectedRoute";
 import { trackDailyActivity } from "./lib/userActivityTracking";
 
@@ -66,11 +71,14 @@ const App = () => {
             <Route path="/kontak" element={<Kontak />} />
             <Route path="/login" element={<Login />} />
             <Route path="/register" element={<Register />} />
+            <Route path="/syarat-ketentuan" element={<SyaratKetentuan />} />
+            <Route path="/kebijakan-privasi" element={<KebijakanPrivasi />} />
+            <Route path="/approval-waiting" element={<ApprovalWaiting />} />
             <Route path="/profile" element={<Profile />} />
             <Route
               path="/admin/dashboard"
               element={
-                <ProtectedRoute allow={["admin", "head", "nurse"]}>
+                <ProtectedRoute allow={["head", "nurse"]}>
                   <AdminDashboard />
                 </ProtectedRoute>
               }
@@ -78,8 +86,16 @@ const App = () => {
             <Route
               path="/admin/patients"
               element={
-                <ProtectedRoute allow={["head"]}>
+                <ProtectedRoute allow={["admin", "head", "nurse"]}>
                   <PatientManagement />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/pending-approvals"
+              element={
+                <ProtectedRoute allow={["admin", "head", "nurse"]}>
+                  <PendingApprovals />
                 </ProtectedRoute>
               }
             />
@@ -94,9 +110,7 @@ const App = () => {
             <Route
               path="/admin/register"
               element={
-                <ProtectedRoute allow={["admin"]}>
-                  <AdminRegister />
-                </ProtectedRoute>
+                <Navigate to="/admin/users" replace />
               }
             />
             <Route
@@ -112,6 +126,14 @@ const App = () => {
               element={
                 <ProtectedRoute allow={["admin"]}>
                   <RAGManagement />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/database"
+              element={
+                <ProtectedRoute allow={["admin"]}>
+                  <DatabaseManagement />
                 </ProtectedRoute>
               }
             />
@@ -136,6 +158,14 @@ const App = () => {
               element={
                 <ProtectedRoute allow={["head", "nurse"]}>
                   <ScheduleManagement />
+                </ProtectedRoute>
+              }
+            />
+            <Route
+              path="/admin/approval-informasi"
+              element={
+                <ProtectedRoute allow={["head"]}>
+                  <ApprovalInformasi />
                 </ProtectedRoute>
               }
             />

@@ -1,11 +1,28 @@
-import React, { useState, useRef, useEffect, useMemo } from 'react';
+import React, { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import Layout from '../components/layout/Layout';
 import { FaPaperPlane } from 'react-icons/fa';
 import { motion } from 'framer-motion';
 import { useToast } from '@/hooks/use-toast';
+import { getUserInitial, useRealtimeUser } from '@/hooks/use-realtime-user';
 import { getGeminiResponse, isGeminiConfigured, type ChatMessage } from '../lib/gemini';
 import { trackConsultation } from '../lib/userActivityTracking';
-import { buildSupportContactText, publicInfo, publicLinks } from '../lib/publicInfo';
+import { buildSupportContactText, formatPhoneDisplay, publicInfo, publicLinks } from '../lib/publicInfo';
+import {
+  CHAT_DAILY_USAGE_STORAGE_KEY,
+  CHAT_GUEST_SESSION_STORAGE_KEY,
+  GUEST_DAILY_MESSAGE_LIMIT,
+  GUEST_SESSION_MESSAGE_LIMIT,
+  PATIENT_DAILY_MESSAGE_LIMIT,
+  getGuestDailyUsageCount,
+  getGuestSessionUsageCount,
+  getPatientDailyUsageCount,
+  incrementGuestDailyUsageCount,
+  incrementGuestSessionUsageCount,
+  incrementPatientDailyUsageCount,
+  broadcastQuotaChange,
+  onQuotaChanged,
+  readAllQuotas,
+} from '../lib/chatLimits';
 import { ROLE_PATIENT, ROLE_PUBLIC } from '../lib/roles';
 import {
   AlertTriangle,
@@ -40,7 +57,15 @@ interface ChatHistoryItem {
   messages: Message[];
 }
 
-const GUEST_MESSAGE_LIMIT = 5;
+type MessageBlock =
+  | { type: 'heading'; text: string }
+  | { type: 'important'; text: string }
+  | { type: 'numbered'; marker: string; text: string }
+  | { type: 'bullet'; text: string }
+  | { type: 'question'; text: string }
+  | { type: 'closing'; text: string }
+  | { type: 'paragraph'; text: string };
+
 const INITIAL_ASSISTANT_MESSAGE = 'Halo! Saya Chatbot Puskesmas. Bagaimana saya bisa membantu Anda dengan pertanyaan seputar kesehatan hari ini?';
 const PATIENT_CHAT_STORAGE_KEY_PREFIX = 'puskesbot:patient-chat-sessions:';
 
@@ -84,6 +109,100 @@ const sessionPreviewFromMessages = (messages: Message[]): string => {
   return summarizeText(latest, 70);
 };
 
+const headingPattern = /^(Pengobatan|Perawatan|Rekomendasi|Manfaat|Risiko|Resiko|Pencegahan|Penyebab|Gejala|Diagnosis|Komplikasi|Tanda|Ciri|Obat|Terapi|Penanganan|Penularan|Definisi|Apa itu|Cara|Langkah)\s*:?$/i;
+const importantPattern = /^(Penting|Catatan|Perhatian|Ingat|Warning|Peringatan)[:\s!]/i;
+const questionPattern = /^(Kapan|Mengapa|Bagaimana|Apa|Siapa|Di mana|Berapa).*\?$/i;
+const closingPattern = /^(Semoga|Jika|Jangan|Tetap|Cepat|Salam|Sebagai|Saya|Terima kasih|Silakan|Jangan ragu|Ingat)/i;
+const listMarkerPattern = /^(\d+[.)]|[-*•])\s+/;
+const shortHeadingPattern = /^[A-Z][A-Za-z0-9\s()/,.-]{2,56}:$/;
+const wrappedContinuationPattern = /^(dan|atau|yang|untuk|dengan|agar|sehingga|karena|jika|bila|serta|pada|di|ke|dari|oleh|tanpa|lebih|kurang|misalnya|contoh|termasuk)\b/i;
+
+const sanitizeLine = (line: string): string => {
+  return line
+    .trim()
+    .replace(/\*\*\*/g, '')
+    .replace(/\*\*/g, '')
+    .replace(/\*/g, '')
+    .replace(/__/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+};
+
+const shouldMergeShortContinuation = (previous: string, current: string): boolean => {
+  if (!previous || /[.!?]$/.test(previous)) return false;
+  if (listMarkerPattern.test(current)) return false;
+  return /^(cara|langkah|catatan|rekomendasi|pencegahan|pengobatan|penanganan)\s*:?$/i.test(current);
+};
+
+const shouldMergeWrappedLine = (previous: string, current: string): boolean => {
+  if (!previous) return false;
+  if (listMarkerPattern.test(current)) return false;
+  if (headingPattern.test(current) || importantPattern.test(current) || questionPattern.test(current)) return false;
+  if (shortHeadingPattern.test(current)) return false;
+  if (/:$/.test(previous) || /[.!?]$/.test(previous)) return false;
+
+  return /^[a-z(]/.test(current) || wrappedContinuationPattern.test(current);
+};
+
+const buildMessageBlocks = (content: string): MessageBlock[] => {
+  const mergedLines = content
+    .replace(/\r\n/g, '\n')
+    .split('\n')
+    .map(sanitizeLine)
+    .filter(Boolean)
+    .reduce<string[]>((acc, line) => {
+      if (
+        acc.length > 0 &&
+        (shouldMergeShortContinuation(acc[acc.length - 1], line) || shouldMergeWrappedLine(acc[acc.length - 1], line))
+      ) {
+        acc[acc.length - 1] = `${acc[acc.length - 1]} ${line}`;
+        return acc;
+      }
+
+      acc.push(line);
+      return acc;
+    }, []);
+
+  return mergedLines.map((line, index) => {
+    const numberedMatch = line.match(/^(\d+)[.)]\s+(.+)/);
+    if (numberedMatch) {
+      return {
+        type: 'numbered',
+        marker: `${numberedMatch[1]}.`,
+        text: numberedMatch[2].trim(),
+      };
+    }
+
+    const bulletMatch = line.match(/^(?:[-*•])\s+(.+)/);
+    if (bulletMatch) {
+      return { type: 'bullet', text: bulletMatch[1].trim() };
+    }
+
+    if (importantPattern.test(line)) {
+      return { type: 'important', text: line };
+    }
+
+    if (headingPattern.test(line) || shortHeadingPattern.test(line)) {
+      return { type: 'heading', text: line.replace(/:\s*$/, '') };
+    }
+
+    if (questionPattern.test(line)) {
+      return { type: 'question', text: line };
+    }
+
+    const isClosing = index === mergedLines.length - 1 && (
+      closingPattern.test(line) ||
+      /(siap membantu|pertanyaan lain|butuhkan|memerlukan)/i.test(line)
+    );
+
+    if (isClosing) {
+      return { type: 'closing', text: line };
+    }
+
+    return { type: 'paragraph', text: line };
+  });
+};
+
 const Konsultasi = () => {
   const [message, setMessage] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -101,12 +220,27 @@ const Konsultasi = () => {
   const [activeHistoryId, setActiveHistoryId] = useState('aktif');
   const [historyItems, setHistoryItems] = useState<ChatHistoryItem[]>([]);
   const [sessionsHydrated, setSessionsHydrated] = useState(false);
+  const [guestDailyUsage, setGuestDailyUsage] = useState(() => getGuestDailyUsageCount());
+  const [patientDailyUsage, setPatientDailyUsage] = useState(() => {
+    try {
+      const raw = localStorage.getItem('user');
+      if (!raw) return 0;
+      const parsed = JSON.parse(raw);
+      if (parsed?.role !== ROLE_PATIENT || !parsed?.email) return 0;
+      return getPatientDailyUsageCount(parsed.email);
+    } catch { return 0; }
+  });
+  const [guestSessionUsage, setGuestSessionUsage] = useState(() => getGuestSessionUsageCount());
 
   const chatContainerRef = useRef<HTMLDivElement>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const { toast } = useToast();
+  const realtimeUser = useRealtimeUser();
 
   const supportContacts = buildSupportContactText();
+  const supportPhone = formatPhoneDisplay(publicInfo.phone || publicInfo.whatsapp || '');
+  const userProfileImage = typeof realtimeUser?.profileImage === 'string' ? realtimeUser.profileImage.trim() : '';
+  const userAvatarInitial = getUserInitial(typeof realtimeUser?.name === 'string' ? realtimeUser.name : 'Anda', 'A');
 
   const getCurrentUserEmail = (): string => {
     try {
@@ -119,6 +253,83 @@ const Konsultasi = () => {
       return '';
     }
   };
+
+  // Keep a ref so event-handler closures always see the latest login state
+  const isLoggedInRef = useRef(isUserLoggedIn);
+  useEffect(() => { isLoggedInRef.current = isUserLoggedIn; }, [isUserLoggedIn]);
+
+  useEffect(() => {
+    if (isUserLoggedIn) {
+      const email = getCurrentUserEmail();
+      setPatientDailyUsage(email ? getPatientDailyUsageCount(email) : 0);
+      setGuestDailyUsage(getGuestDailyUsageCount());
+      setGuestSessionUsage(0); // session limit not relevant for logged-in users
+      return;
+    }
+
+    setGuestDailyUsage(getGuestDailyUsageCount());
+    setGuestSessionUsage(getGuestSessionUsageCount());
+    setPatientDailyUsage(0);
+  }, [isUserLoggedIn, realtimeUser?.email]);
+
+  // ── Re-sync all quota values from localStorage ─────────────────────
+  // Uses ref to avoid stale closures when invoked from event listeners.
+  const syncQuotasFromStorage = useCallback(() => {
+    if (isLoggedInRef.current) {
+      const email = getCurrentUserEmail();
+      const q = readAllQuotas(email || undefined);
+      setPatientDailyUsage(q.patientDaily);
+      setGuestDailyUsage(q.guestDaily);
+      setGuestSessionUsage(0); // session limit not relevant for logged-in users
+      return;
+    }
+    const q = readAllQuotas();
+    setGuestDailyUsage(q.guestDaily);
+    setGuestSessionUsage(q.guestSession);
+    setPatientDailyUsage(0);
+  }, []);
+
+  // Explicit mount sync — guarantees fresh localStorage read regardless of
+  // navigation path (SPA transition, back button, full page load, etc.).
+  useEffect(() => {
+    syncQuotasFromStorage();
+  }, [syncQuotasFromStorage]);
+
+  // Cross-tab sync: StorageEvent + BroadcastChannel + visibilitychange
+  useEffect(() => {
+    // StorageEvent fires only when OTHER tabs write to localStorage
+    const handleStorage = (event: StorageEvent) => {
+      if (!event.key || event.key === CHAT_DAILY_USAGE_STORAGE_KEY || event.key === CHAT_GUEST_SESSION_STORAGE_KEY || event.key === 'user') {
+        syncQuotasFromStorage();
+      }
+    };
+
+    // When user switches back to this tab, re-read from localStorage
+    const handleVisibility = () => {
+      if (document.visibilityState === 'visible') {
+        syncQuotasFromStorage();
+      }
+    };
+
+    // Also re-read when window gains focus (backup for visibility)
+    const handleFocus = () => {
+      syncQuotasFromStorage();
+    };
+
+    window.addEventListener('storage', handleStorage);
+    document.addEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('focus', handleFocus);
+
+    // BroadcastChannel for same-origin cross-tab notifications
+    const unsubBroadcast = onQuotaChanged(syncQuotasFromStorage);
+
+    return () => {
+      window.removeEventListener('storage', handleStorage);
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('focus', handleFocus);
+      unsubBroadcast();
+    };
+  }, [syncQuotasFromStorage]);
 
   const createEmptySession = (): ChatHistoryItem => {
     const nowIso = new Date().toISOString();
@@ -450,9 +661,6 @@ const Konsultasi = () => {
       .trim();
 
     formatted = formatted
-      .replace(/(Pengobatan|Perawatan|Rekomendasi|Manfaat|Risiko|Resiko|Pencegahan|Penyebab|Gejala|Diagnosis|Komplikasi|Tanda|Ciri|Obat|Terapi|Penanganan|Penularan|Definisi|Cara|Langkah)\s*:/gi, '\n\n$1:\n');
-
-    formatted = formatted
       .replace(/^\s*[*-]\s+/gm, '• ')
       .replace(/^\s*•\s+/gm, '• ');
 
@@ -485,23 +693,78 @@ const Konsultasi = () => {
       return;
     }
 
-    const guestMessageCount = conversation.filter((msg) => msg.role === 'user').length;
-    if (!isUserLoggedIn && guestMessageCount >= GUEST_MESSAGE_LIMIT) {
-      const limitMessage = `Mode tamu dibatasi hingga ${GUEST_MESSAGE_LIMIT} pertanyaan per sesi. Silakan login untuk konsultasi lebih lanjut.`;
-      toast({
-        title: 'Batas mode tamu tercapai',
-        description: limitMessage,
-        variant: 'destructive',
-      });
-      setConversation((prev) => [...prev, {
-        role: 'assistant',
-        content: limitMessage,
-      }]);
-      return;
+    const currentGuestSessionCount = getGuestSessionUsageCount();
+    const guestUnlockMessage = `Silakan login untuk unlock fitur pasien: hingga ${PATIENT_DAILY_MESSAGE_LIMIT} pertanyaan per hari, riwayat percakapan tersimpan, ganti judul, dan hapus percakapan.`;
+
+    if (!isUserLoggedIn) {
+      const guestDailyUsageCount = getGuestDailyUsageCount();
+
+      if (currentGuestSessionCount >= GUEST_SESSION_MESSAGE_LIMIT) {
+        const sessionLimitMessage = `Batas mode masyarakat tercapai: maksimal ${GUEST_SESSION_MESSAGE_LIMIT} pertanyaan per sesi. ${guestUnlockMessage}`;
+        toast({
+          title: 'Batas sesi masyarakat tercapai',
+          description: sessionLimitMessage,
+          variant: 'destructive',
+        });
+        setConversation((prev) => [...prev, {
+          role: 'assistant',
+          content: sessionLimitMessage,
+        }]);
+        return;
+      }
+
+      if (guestDailyUsageCount >= GUEST_DAILY_MESSAGE_LIMIT) {
+        const dailyLimitMessage = `Batas harian mode masyarakat tercapai: maksimal ${GUEST_DAILY_MESSAGE_LIMIT} pertanyaan per hari per perangkat. ${guestUnlockMessage}`;
+        toast({
+          title: 'Batas harian masyarakat tercapai',
+          description: dailyLimitMessage,
+          variant: 'destructive',
+        });
+        setConversation((prev) => [...prev, {
+          role: 'assistant',
+          content: dailyLimitMessage,
+        }]);
+        return;
+      }
+    }
+
+    if (isUserLoggedIn) {
+      const email = getCurrentUserEmail();
+      if (email) {
+        const patientDailyUsageCount = getPatientDailyUsageCount(email);
+        if (patientDailyUsageCount >= PATIENT_DAILY_MESSAGE_LIMIT) {
+          const patientLimitMessage = `Batas harian akun pasien tercapai: maksimal ${PATIENT_DAILY_MESSAGE_LIMIT} pertanyaan per hari. Anda tetap bisa membuka riwayat percakapan, mengganti judul, atau menghapus percakapan. Silakan lanjutkan kembali besok.`;
+          toast({
+            title: 'Batas harian pasien tercapai',
+            description: patientLimitMessage,
+            variant: 'destructive',
+          });
+          setConversation((prev) => [...prev, {
+            role: 'assistant',
+            content: patientLimitMessage,
+          }]);
+          return;
+        }
+      }
     }
 
     const userMessage = message;
     setMessage('');
+
+    if (!isUserLoggedIn) {
+      const nextGuestDailyUsage = incrementGuestDailyUsageCount();
+      setGuestDailyUsage(nextGuestDailyUsage);
+      const nextGuestSessionUsage = incrementGuestSessionUsageCount();
+      setGuestSessionUsage(nextGuestSessionUsage);
+      broadcastQuotaChange();
+    } else {
+      const email = getCurrentUserEmail();
+      if (email) {
+        const nextPatientDailyUsage = incrementPatientDailyUsageCount(email);
+        setPatientDailyUsage(nextPatientDailyUsage);
+        broadcastQuotaChange();
+      }
+    }
 
     const sessionIdForMessage = isUserLoggedIn
       ? (activeHistoryId !== 'aktif' ? activeHistoryId : makeSessionId())
@@ -522,8 +785,8 @@ const Konsultasi = () => {
       const { isHealthRelated, isClear } = analyzeQuery(userMessage);
 
       if (!isClear) {
-        const unclearConversation = [...newConversation, {
-          role: 'assistant',
+        const unclearConversation: Message[] = [...newConversation, {
+          role: 'assistant' as const,
           content: 'Maaf, pertanyaan Anda kurang jelas. Mohon ajukan pertanyaan yang lebih spesifik agar saya dapat membantu dengan baik.'
         }];
         setConversation(unclearConversation);
@@ -535,8 +798,8 @@ const Konsultasi = () => {
       }
 
       if (!isUserLoggedIn && !isHealthRelated) {
-        const guestLimitedConversation = [...newConversation, {
-          role: 'assistant',
+        const guestLimitedConversation: Message[] = [...newConversation, {
+          role: 'assistant' as const,
           content: 'Mode tamu hanya melayani informasi kesehatan umum dan layanan Puskesmas (jam layanan, lokasi, pendaftaran, kontak, dan jadwal). Silakan login untuk konsultasi kesehatan yang lebih personal.'
         }];
         setConversation(guestLimitedConversation);
@@ -547,11 +810,21 @@ const Konsultasi = () => {
         return;
       }
 
-      const chatMessages: ChatMessage[] = newConversation
+      // Only send a limited window of messages to the backend to prevent
+      // context pollution. We send the last 2 user-assistant pairs plus the
+      // current user message (max 5 messages). The full conversation stays
+      // in the frontend for display.
+      const relevantMessages = newConversation
         .filter((msg, index) => {
+          // Skip the initial bot greeting
           if (index === 0 && msg.role === 'assistant') return false;
           return true;
-        })
+        });
+
+      // Take only the last 5 messages (2 pairs + current user message)
+      const recentMessages = relevantMessages.slice(-5);
+
+      const chatMessages: ChatMessage[] = recentMessages
         .map(msg => ({
           role: msg.role,
           content: msg.content
@@ -560,8 +833,8 @@ const Konsultasi = () => {
       const aiResponse = await getGeminiResponse(chatMessages, isUserLoggedIn ? 'consultation' : 'public');
       const formattedResponse = formatAIResponse(aiResponse);
 
-      const answeredConversation = [...newConversation, {
-        role: 'assistant',
+      const answeredConversation: Message[] = [...newConversation, {
+        role: 'assistant' as const,
         content: formattedResponse
       }];
       setConversation(answeredConversation);
@@ -614,8 +887,8 @@ const Konsultasi = () => {
         ? `${errorMessage}\n\n${errorDetail}`
         : `Maaf, terjadi kesalahan: ${errorMessage}\n\nSilakan coba lagi atau hubungi layanan dukungan berikut:\n${supportContacts}`;
 
-      const errorConversation = [...newConversation, {
-        role: 'assistant',
+      const errorConversation: Message[] = [...newConversation, {
+        role: 'assistant' as const,
         content: fullErrorMessage
       }];
       setConversation(errorConversation);
@@ -627,85 +900,70 @@ const Konsultasi = () => {
     }
   };
 
-  const FormattedMessage = ({ content }: { content: string }) => {
-    const allLines = content.split('\n').filter(line => line.trim() !== '');
-    let currentHeaderNumber = 0;
-    let subItemCounter = 0;
+  const guestSessionRemaining = Math.max(0, GUEST_SESSION_MESSAGE_LIMIT - guestSessionUsage);
+  const guestDailyRemaining = Math.max(0, GUEST_DAILY_MESSAGE_LIMIT - guestDailyUsage);
+  const patientDailyRemaining = Math.max(0, PATIENT_DAILY_MESSAGE_LIMIT - patientDailyUsage);
+
+  const FormattedMessage = ({ content, role }: { content: string; role: Message['role'] }) => {
+    if (role === 'user') {
+      return (
+        <p className="whitespace-pre-wrap text-[0.95rem] font-semibold leading-relaxed tracking-[0.01em] text-white">
+          {content.trim()}
+        </p>
+      );
+    }
+
+    const blocks = buildMessageBlocks(content);
 
     return (
-      <div className="space-y-1.5 text-sm leading-relaxed">
-        {allLines.map((line, lineIndex) => {
-          let trimmedLine = line.trim()
-            .replace(/\*\*\*/g, '')
-            .replace(/\*\*/g, '')
-            .replace(/\*/g, '')
-            .replace(/__|__/g, '')
-            .trim();
-
-          if (/^\d+\.\s+[A-Z]/.test(trimmedLine)) {
-            trimmedLine = trimmedLine.replace(/^\d+\.\s+/, '');
-          }
-
-          if (!trimmedLine) return null;
-
-          const isHeader = trimmedLine.match(/^(Pengobatan|Perawatan|Rekomendasi|Manfaat|Risiko|Resiko|Pencegahan|Penyebab|Gejala|Diagnosis|Komplikasi|Tanda|Ciri|Obat|Terapi|Penanganan|Penularan|Definisi|Apa itu|Cara|Langkah)[:\s]/i);
-          const isImportant = trimmedLine.match(/^(Penting|Catatan|Perhatian|Ingat|Warning|Peringatan)[:\s!]/i);
-          const isQuestion = trimmedLine.match(/^(Kapan|Mengapa|Bagaimana|Apa|Siapa|Di mana|Berapa).*\?$/i);
-          const isBoldText = trimmedLine.endsWith(':') && trimmedLine.length < 80;
-          const isFirstLine = lineIndex === 0 && trimmedLine.length > 50;
-          const isDisclaimer = trimmedLine.match(/^(Meskipun|Namun|Perlu diingat|Harap diingat|Catatan penting|Disclaimer)/i);
-          const isLastLine = lineIndex === allLines.length - 1 && (
-            trimmedLine.match(/^(Semoga|Jika|Jangan|Tetap|Cepat|Salam|Sebagai|Saya|Terima kasih|Silakan|Jangan ragu|Ingat)/i) ||
-            trimmedLine.match(/(siap membantu|pertanyaan lain|butuhkan|memerlukan)/i)
-          );
-
-          if (isHeader) {
-            currentHeaderNumber++;
-            subItemCounter = 0;
+      <div className="space-y-1.5 text-[0.85rem] leading-snug md:space-y-3 md:text-[1rem] md:leading-relaxed">
+        {blocks.map((block, index) => {
+          if (block.type === 'heading') {
             return (
-              <div key={lineIndex} className="mt-4 first:mt-0">
-                <h3 className="font-semibold text-slate-700 text-sm pb-1.5 border-b border-slate-200 mb-2">
-                  <span className="text-sky-500 mr-1.5">{currentHeaderNumber}.</span>
-                  {trimmedLine.replace(/:\s*$/, '')}
-                </h3>
-              </div>
+              <h3 key={index} className="mt-2.5 rounded-r-md border-l-2 border-emerald-300 bg-emerald-50/70 py-0.5 pl-2 text-[0.82rem] font-semibold text-slate-700 first:mt-0 md:mt-3 md:py-1 md:text-[0.95rem]">
+                {block.text}
+              </h3>
             );
           }
 
-          if (isImportant) {
+          if (block.type === 'important') {
             return (
-              <div key={lineIndex} className="bg-amber-50 border-l-2 border-amber-400 p-2.5 rounded-r my-2">
-                <p className="text-amber-800 font-medium text-xs flex items-start gap-1.5">
-                  <AlertTriangle className="w-3.5 h-3.5 flex-shrink-0 mt-0.5" />
-                  <span>{trimmedLine}</span>
+              <div key={index} className="my-1.5 rounded-r border-l-2 border-amber-400 bg-amber-50 p-2 md:my-2.5 md:p-3">
+                <p className="flex items-start gap-1.5 text-[0.72rem] font-medium text-amber-800 md:text-[0.82rem]">
+                  <AlertTriangle className="mt-0.5 h-3 w-3 flex-shrink-0 md:h-3.5 md:w-3.5" />
+                  <span>{block.text}</span>
                 </p>
               </div>
             );
           }
 
-          if (isQuestion) {
-            return <p key={lineIndex} className="font-medium text-slate-700 mt-3 mb-1">{trimmedLine}</p>;
+          if (block.type === 'numbered') {
+            return (
+              <div key={index} className="my-1 flex items-start gap-1.5 md:my-2 md:gap-2.5">
+                <span className="mt-0.5 min-w-[1.1rem] text-[0.72rem] font-semibold text-emerald-600 md:min-w-[1.35rem] md:text-xs">{block.marker}</span>
+                <p className="flex-1 text-[0.85rem] leading-snug text-slate-700 md:text-[1rem] md:leading-relaxed">{block.text}</p>
+              </div>
+            );
           }
 
-          if (isBoldText) {
-            return <p key={lineIndex} className="font-medium text-slate-700 mt-2 mb-0.5 ml-5">{trimmedLine}</p>;
+          if (block.type === 'bullet') {
+            return (
+              <div key={index} className="my-1 flex items-start gap-1.5 md:my-2 md:gap-2.5">
+                <span className="mt-0.5 min-w-[1.1rem] text-[0.72rem] font-semibold text-emerald-600 md:min-w-[1.35rem] md:text-xs">•</span>
+                <p className="flex-1 text-[0.85rem] leading-snug text-slate-700 md:text-[1rem] md:leading-relaxed">{block.text}</p>
+              </div>
+            );
           }
 
-          if (isFirstLine) {
-            return <p key={lineIndex} className="text-slate-600 mb-2">{trimmedLine}</p>;
+          if (block.type === 'question') {
+            return <p key={index} className="mt-2 text-[0.85rem] font-semibold text-slate-700 md:mt-2.5 md:text-[1rem]">{block.text}</p>;
           }
 
-          if (isDisclaimer || isLastLine) {
-            return <p key={lineIndex} className="text-slate-500 mt-3 italic text-xs">{trimmedLine}</p>;
+          if (block.type === 'closing') {
+            return <p key={index} className="mt-3 text-[0.72rem] italic text-slate-500 md:mt-3.5 md:text-xs">{block.text}</p>;
           }
 
-          subItemCounter++;
-          return (
-            <div key={lineIndex} className="flex items-start gap-2 ml-5 my-1">
-              <span className="font-medium text-emerald-600 min-w-[1.2rem] text-xs mt-0.5">{subItemCounter}.</span>
-              <p className="text-slate-600 flex-1">{trimmedLine}</p>
-            </div>
-          );
+          return <p key={index} className="text-[0.85rem] leading-snug text-slate-700 md:text-[1rem] md:leading-relaxed">{block.text}</p>;
         })}
       </div>
     );
@@ -736,7 +994,7 @@ const Konsultasi = () => {
                     <p className="mb-1 flex items-center gap-1 font-medium text-slate-600"><PhoneIcon className="h-3.5 w-3.5" /> Hubungi langsung:</p>
                     <p className="text-slate-500">
                       WhatsApp: {publicLinks.whatsapp ? (
-                        <a href={publicLinks.whatsapp} target="_blank" rel="noopener noreferrer" className="font-medium text-emerald-600 hover:text-emerald-700">{publicInfo.phone || publicInfo.whatsapp}</a>
+                        <a href={publicLinks.whatsapp} target="_blank" rel="noopener noreferrer" className="font-medium text-emerald-600 hover:text-emerald-700">{supportPhone || 'Belum dikonfigurasi'}</a>
                       ) : (
                         <span>Belum dikonfigurasi</span>
                       )}
@@ -755,7 +1013,7 @@ const Konsultasi = () => {
           <div className="relative overflow-hidden rounded-3xl border border-emerald-100/80 bg-white shadow-xl shadow-emerald-100/30">
             <div className="pointer-events-none absolute inset-0 -z-10 bg-gradient-to-br from-emerald-50/70 via-white to-teal-50/70" />
 
-            {!isPublicUser && sidebarOpen && (
+            {isUserLoggedIn && sidebarOpen && (
               <button
                 type="button"
                 aria-label="Tutup panel riwayat"
@@ -765,8 +1023,8 @@ const Konsultasi = () => {
             )}
 
             <div className="flex min-h-[70vh] lg:min-h-[74vh]">
-              {!isPublicUser && (
-              <aside className={`absolute inset-y-0 left-0 z-30 flex w-72 flex-col border-r border-gray-100 bg-white transition-transform duration-300 lg:static lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
+              {isUserLoggedIn && (
+              <aside className={`absolute inset-y-0 left-0 z-30 flex w-72 flex-col border-r border-emerald-100/70 bg-gradient-to-b from-white via-emerald-50/30 to-teal-50/30 transition-transform duration-300 lg:static lg:translate-x-0 ${sidebarOpen ? 'translate-x-0' : '-translate-x-full'}`}>
                 <div className="bg-gradient-to-br from-emerald-600 to-teal-700 px-4 pb-4 pt-5">
                   <div className="mb-4 flex items-center justify-between">
                     <div className="flex items-center gap-2.5">
@@ -803,7 +1061,7 @@ const Konsultasi = () => {
                   </button>
                 </div>
 
-                <div className="border-b border-gray-100 px-3 py-3">
+                <div className="border-b border-emerald-100/70 bg-white/70 px-3 py-3 backdrop-blur-sm">
                   <div className="relative">
                     <Search className="absolute left-3 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-gray-400" />
                     <input
@@ -811,7 +1069,7 @@ const Konsultasi = () => {
                       value={searchQuery}
                       onChange={(e) => setSearchQuery(e.target.value)}
                       placeholder="Cari percakapan..."
-                      className="w-full rounded-lg border border-gray-200 bg-gray-50 py-2 pl-9 pr-3 text-sm placeholder:text-gray-400 focus:border-transparent focus:outline-none focus:ring-2 focus:ring-emerald-300"
+                      className="w-full rounded-lg border border-emerald-100/90 bg-white/90 py-2 pl-9 pr-3 text-sm placeholder:text-gray-400 shadow-sm focus:border-transparent focus:outline-none focus:ring-2 focus:ring-emerald-300"
                     />
                   </div>
                 </div>
@@ -820,7 +1078,7 @@ const Konsultasi = () => {
                   {sidebarGroups.map((group) => {
                     return (
                       <div key={group.title}>
-                        <p className="px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-gray-400">{group.title}</p>
+                        <p className="px-4 py-1.5 text-xs font-semibold uppercase tracking-wider text-slate-400">{group.title}</p>
                         {group.items.map((chat) => (
                           <button
                             key={chat.id}
@@ -833,7 +1091,7 @@ const Konsultasi = () => {
                               }
                               setSidebarOpen(false);
                             }}
-                            className={`group relative mx-1 flex w-[calc(100%-8px)] items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-all ${activeHistoryId === chat.id ? 'border-emerald-200 bg-emerald-50' : 'border-transparent hover:bg-gray-50'}`}
+                            className={`group relative mx-1 flex w-[calc(100%-8px)] items-start gap-2.5 rounded-xl border px-3 py-2.5 text-left transition-all ${activeHistoryId === chat.id ? 'border-emerald-300 bg-gradient-to-br from-emerald-50 to-teal-50 shadow-sm shadow-emerald-100/60' : 'border-white/70 bg-white/80 hover:border-teal-100 hover:bg-gradient-to-br hover:from-white hover:to-emerald-50/70'}`}
                           >
                             <div className="min-w-0 flex-1">
                               <p className={`truncate text-sm ${activeHistoryId === chat.id ? 'font-semibold text-emerald-800' : 'text-gray-800'}`}>{chat.label}</p>
@@ -844,15 +1102,16 @@ const Konsultasi = () => {
                             </div>
                             {activeHistoryId === chat.id && <ChevronRight className="h-3.5 w-3.5 text-emerald-500" />}
                             {isUserLoggedIn && (
-                              <div className="absolute right-2 top-2 flex items-center gap-1 opacity-0 transition-all group-hover:opacity-100">
+                              <div className="absolute right-2 top-2 flex items-center gap-1 rounded-lg bg-white/95 p-0.5 shadow-sm ring-1 ring-slate-200/80 backdrop-blur-sm transition-all">
                                 <button
                                   type="button"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     renamePatientSession(chat.id);
                                   }}
-                                  className="rounded-md p-1 text-gray-300 hover:bg-emerald-50 hover:text-emerald-500"
+                                  className="rounded-md border border-emerald-200 bg-emerald-50/90 p-1 text-emerald-700 transition-colors hover:bg-emerald-100 hover:text-emerald-800"
                                   title="Ganti judul"
+                                  aria-label="Ganti judul"
                                 >
                                   <Pencil className="h-3.5 w-3.5" />
                                 </button>
@@ -862,8 +1121,9 @@ const Konsultasi = () => {
                                     e.stopPropagation();
                                     deletePatientSession(chat.id);
                                   }}
-                                  className="rounded-md p-1 text-gray-300 hover:bg-red-50 hover:text-red-400"
+                                  className="rounded-md border border-rose-200 bg-rose-50/90 p-1 text-rose-700 transition-colors hover:bg-rose-100 hover:text-rose-800"
                                   title="Hapus percakapan"
+                                  aria-label="Hapus percakapan"
                                 >
                                   <Trash2 className="h-3.5 w-3.5" />
                                 </button>
@@ -878,9 +1138,9 @@ const Konsultasi = () => {
               </aside>
               )}
 
-              <div className={`flex min-w-0 flex-1 flex-col ${isPublicUser ? 'bg-white' : 'bg-gray-50/80'}`}>
-                <div className="flex items-center gap-3 border-b border-gray-100 bg-white px-4 py-3 shadow-sm">
-                  {!isPublicUser && (
+              <div className={`flex min-w-0 flex-1 flex-col ${isPublicUser ? 'bg-white' : 'bg-gradient-to-b from-slate-50/80 via-white to-emerald-50/40'}`}>
+                <div className="flex items-center gap-3 border-b border-emerald-100/70 bg-white/90 px-4 py-3 shadow-sm backdrop-blur-sm">
+                  {isUserLoggedIn && (
                     <button
                       type="button"
                       onClick={() => setSidebarOpen(true)}
@@ -896,7 +1156,7 @@ const Konsultasi = () => {
                     <span className="absolute -bottom-0.5 -right-0.5 h-3 w-3 rounded-full border-2 border-white bg-emerald-400" />
                   </div>
                   <div className="min-w-0 flex-1">
-                    <h2 className="truncate text-[0.9375rem] font-semibold text-gray-900">Asisten Virtual Puskesmas</h2>
+                    <h2 className="truncate text-[0.9375rem] font-semibold text-gray-900">Chatbot Puskesmas Wori</h2>
                     <div className="flex items-center gap-2 text-xs">
                       <p className="font-medium text-emerald-600">Online • Siap membantu 24/7</p>
                       <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-0.5 ${isUserLoggedIn ? 'border-emerald-200 bg-emerald-50 text-emerald-700' : 'border-teal-200 bg-teal-50 text-teal-700'}`}>
@@ -910,13 +1170,13 @@ const Konsultasi = () => {
                     {publicInfo.address && (
                       <div className="flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5 text-gray-400" /> {publicInfo.address}</div>
                     )}
-                    {publicInfo.phone && (
-                      <div className="flex items-center gap-1.5"><PhoneIcon className="h-3.5 w-3.5 text-gray-400" /> {publicInfo.phone}</div>
+                    {supportPhone && (
+                      <div className="flex items-center gap-1.5"><PhoneIcon className="h-3.5 w-3.5 text-gray-400" /> {supportPhone}</div>
                     )}
                     {publicInfo.openHours && (
                       <div className="flex items-center gap-1.5"><Clock className="h-3.5 w-3.5 text-gray-400" /> {publicInfo.openHours}</div>
                     )}
-                    {!publicInfo.address && !publicInfo.phone && !publicInfo.openHours && (
+                    {!publicInfo.address && !supportPhone && !publicInfo.openHours && (
                       <div className="flex items-center gap-1.5"><Info className="h-3.5 w-3.5 text-gray-400" /> Kontak layanan belum dikonfigurasi</div>
                     )}
                   </div>
@@ -925,9 +1185,24 @@ const Konsultasi = () => {
 
                 {!isUserLoggedIn && (
                   <div className="mx-4 mt-4 rounded-xl border border-teal-100 bg-teal-50 p-3.5">
-                    <p className="text-xs text-slate-500">
-                      Mode tamu aktif: Anda bisa bertanya informasi kesehatan umum dan layanan Puskesmas secara terbatas (maks {GUEST_MESSAGE_LIMIT} pertanyaan per sesi).
-                      <strong className="text-slate-600"> Silakan login untuk konsultasi medis yang lebih lengkap.</strong>
+                    <p className="text-xs text-slate-600">
+                      Mode masyarakat aktif: maksimal {GUEST_SESSION_MESSAGE_LIMIT} pertanyaan per sesi dan {GUEST_DAILY_MESSAGE_LIMIT} pertanyaan per hari per perangkat.
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Sisa sesi: <strong className="text-slate-700">{guestSessionRemaining}</strong> • Sisa harian: <strong className="text-slate-700">{guestDailyRemaining}</strong>.
+                      <strong className="text-slate-700"> Login untuk unlock fitur pasien: limit {PATIENT_DAILY_MESSAGE_LIMIT} pertanyaan per hari, riwayat percakapan tersimpan, ganti judul, dan hapus percakapan.</strong>
+                    </p>
+                  </div>
+                )}
+
+                {isUserLoggedIn && (
+                  <div className="mx-4 mt-4 rounded-xl border border-emerald-100 bg-emerald-50 p-3.5">
+                    <p className="text-xs text-slate-600">
+                      Mode pasien aktif: maksimal {PATIENT_DAILY_MESSAGE_LIMIT} pertanyaan per hari per akun.
+                      <strong className="text-slate-700"> Sisa hari ini: {patientDailyRemaining} pertanyaan.</strong>
+                    </p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      Riwayat percakapan tersimpan, dan Anda dapat mengganti judul atau menghapus percakapan dari panel kiri.
                     </p>
                   </div>
                 )}
@@ -946,14 +1221,20 @@ const Konsultasi = () => {
                           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-emerald-500 to-teal-600">
                             <Stethoscope className="h-4 w-4 text-white" />
                           </div>
+                        ) : userProfileImage ? (
+                          <img
+                            src={userProfileImage}
+                            alt="Foto profil"
+                            className="h-8 w-8 rounded-lg border border-blue-100 object-cover"
+                          />
                         ) : (
-                          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 text-xs font-semibold text-white">Anda</div>
+                          <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-gradient-to-br from-blue-500 to-indigo-600 text-xs font-semibold text-white">{userAvatarInitial}</div>
                         )}
                       </div>
 
                       <div className={`flex max-w-[88%] flex-col gap-2 sm:max-w-[70%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
-                        <div className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${msg.role === 'user' ? 'rounded-tr-sm bg-gradient-to-br from-emerald-500 to-teal-600 text-white' : 'rounded-tl-sm border border-gray-100 bg-white text-gray-800 shadow-sm'}`}>
-                          <FormattedMessage content={msg.content} />
+                        <div className={`rounded-2xl px-4 py-3 text-sm leading-relaxed ${msg.role === 'user' ? 'rounded-tr-sm border border-emerald-500/70 bg-gradient-to-br from-emerald-700 via-emerald-600 to-teal-700 text-white shadow-md shadow-emerald-900/15' : 'rounded-tl-sm border border-gray-100 bg-white text-gray-800 shadow-sm'}`}>
+                          <FormattedMessage content={msg.content} role={msg.role} />
                         </div>
                       </div>
                     </motion.div>

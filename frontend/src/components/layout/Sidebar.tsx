@@ -1,9 +1,10 @@
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useRef } from 'react';
 import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { Home, Info, Activity, Shield, MessageCircle, Phone, BarChart3, Users, Megaphone, UserPlus, User, LogOut, LogIn, Lock, X, FileEdit, Database, Bell, Calendar } from 'lucide-react';
 import api from '../../lib/api';
 import { isAdminRole, isHeadRole, isStaffRole, roleLabel } from '../../lib/roles';
+import { getUserInitial, useRealtimeUser } from '../../hooks/use-realtime-user';
 
 interface SidebarProps {
   isOpen: boolean;
@@ -13,54 +14,60 @@ interface SidebarProps {
 const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const [user, setUser] = useState<{ name: string; email: string; phone?: string; profileImage?: string; role?: string } | null>(null);
+  const user = useRealtimeUser();
   const sidebarRef = useRef<HTMLDivElement>(null);
 
-  // User state sync
-  useEffect(() => {
-    const updateUser = () => {
-      const userData = localStorage.getItem('user');
-      setUser(userData ? JSON.parse(userData) : null);
-    };
-    updateUser();
-    window.addEventListener('userUpdated', updateUser);
-    window.addEventListener('storage', updateUser);
-    return () => {
-      window.removeEventListener('userUpdated', updateUser);
-      window.removeEventListener('storage', updateUser);
-    };
-  }, []);
-
   const handleLogout = async () => {
-    await api.logout().catch(() => undefined);
     localStorage.removeItem('user');
-    setUser(null);
     window.dispatchEvent(new Event('userUpdated'));
     onClose();
-    navigate('/');
+    navigate('/login', { replace: true });
+    void api.logout().catch(() => undefined);
   };
 
   const isActive = (path: string) => location.pathname === path;
 
-  const navItems = [
-    { to: '/', icon: Home, label: 'Beranda', requiresAuth: false, showFor: 'all' as const },
-    { to: '/tentang', icon: Info, label: 'Tentang', requiresAuth: false, showFor: 'all' as const },
-    { to: '/informasi', icon: Activity, label: 'Informasi', requiresAuth: false, showFor: 'patient' as const },
-    { to: '/pencegahan', icon: Shield, label: 'Pencegahan', requiresAuth: false, showFor: 'patient' as const },
-    { to: '/konsultasi', icon: MessageCircle, label: 'Chatbot', requiresAuth: false, showFor: 'patient' as const },
-    { to: '/jadwal-berobat', icon: Calendar, label: 'Jadwal Berobat', requiresAuth: false, showFor: 'patient' as const },
-    { to: '/kontak', icon: Phone, label: 'Kontak', requiresAuth: false, showFor: 'all' as const },
+  // Define exact navigation sets per role to keep mobile menu aligned with desktop
+  const patientNav = [
+    { to: '/', icon: Home, label: 'Beranda' },
+    { to: '/tentang', icon: Info, label: 'Tentang' },
+    { to: '/informasi', icon: Activity, label: 'Informasi' },
+    { to: '/konsultasi', icon: MessageCircle, label: 'Konsultasi' },
+    { to: '/jadwal-berobat', icon: Calendar, label: 'Jadwal Berobat' },
+    { to: '/kontak', icon: Phone, label: 'Kontak' },
+  ];
+
+  const nurseNav = [
+    { to: '/admin/dashboard', icon: BarChart3, label: 'Dashboard' },
+    { to: '/admin/pending-approvals', icon: FileEdit, label: 'Approval Pendaftaran' },
+    { to: '/admin/announcements', icon: Bell, label: 'Informasi Kesehatan' },
+    { to: '/admin/schedules', icon: Calendar, label: 'Jadwal Berobat/Posyandu' },
+  ];
+
+  const headNav = [
+    { to: '/admin/dashboard', icon: BarChart3, label: 'Dashboard' },
+    { to: '/admin/patients', icon: Users, label: 'Data Pasien' },
+    { to: '/admin/approval-informasi', icon: Bell, label: 'Approval Info & Jadwal' },
+    { to: '/admin/broadcast', icon: Megaphone, label: 'Broadcast WA Resmi' },
+  ];
+
+  const adminNav = [
+    { to: '/admin/users', icon: Users, label: 'Manajemen User' },
+    { to: '/admin/ai', icon: Database, label: 'Konfigurasi RAG & LLM' },
+    { to: '/admin/database', icon: Database, label: 'Kelola Database & Qdrant' },
   ];
 
   const adminItems = [
     { to: '/admin/dashboard', icon: BarChart3, label: 'Dashboard Staf' },
+    { to: '/admin/pending-approvals', icon: FileEdit, label: 'Approval Pendaftaran' },
     { to: '/admin/patients', icon: Users, label: 'Monitoring Data Pasien' },
+    { to: '/admin/approval-informasi', icon: Bell, label: 'Approval Info & Jadwal' },
     { to: '/admin/users', icon: Users, label: 'User Management' },
     { to: '/admin/schedules', icon: Calendar, label: 'Kelola Jadwal Posyandu' },
     { to: '/admin/broadcast', icon: Megaphone, label: 'Manajemen WA Gateway' },
-    { to: '/admin/ai', icon: Database, label: 'Kelola dan Konfigurasi AI' },
+    { to: '/admin/ai', icon: Database, label: 'Konfigurasi RAG & LLM' },
+    { to: '/admin/database', icon: Database, label: 'Kelola Database & Qdrant' },
     { to: '/admin/announcements', icon: Bell, label: 'Informasi Kesehatan' },
-    { to: '/admin/register', icon: UserPlus, label: 'Tambah Staf' },
   ];
 
   return (
@@ -96,7 +103,7 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
                 />
               ) : (
                 <div className="w-10 h-10 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-full flex items-center justify-center text-white text-sm font-bold">
-                  {user.name.charAt(0).toUpperCase()}
+                  {getUserInitial(user.name, 'U')}
                 </div>
               )}
               <div className="flex-1 min-w-0">
@@ -114,64 +121,37 @@ const Sidebar = ({ isOpen, onClose }: SidebarProps) => {
         )}
 
         {/* Main Navigation */}
-        <div className="px-3">
-          <p className="px-3 mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Menu Utama</p>
-          <nav className="space-y-0.5">
-            {navItems
-              .filter((item) => {
-                if (item.showFor === 'all') return true;
-                if (!user) return true; // show for non-logged-in users (will redirect to login)
-                if (item.showFor === 'patient' && isStaffRole(user.role)) return false;
-                return true;
-              })
-              .map((item) => {
-                const locked = item.requiresAuth && !user;
-                const Icon = locked ? Lock : item.icon;
-                const target = locked ? '/login' : item.to;
+        {!isStaffRole(user?.role) && (
+          <div className="px-3">
+            <p className="px-3 mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Menu Utama</p>
+            <nav className="space-y-0.5">
+              {patientNav.map((item) => {
                 const active = isActive(item.to);
-
                 return (
                   <Link
                     key={item.to}
-                    to={target}
+                    to={item.to}
                     onClick={onClose}
-                    title={locked ? 'Silakan login untuk mengakses' : undefined}
                     className={`flex items-center gap-3 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors duration-150 ${active
                       ? 'bg-emerald-50 text-emerald-700'
-                      : locked
-                        ? 'text-slate-400 hover:bg-slate-50'
-                        : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'
+                      : 'text-slate-600 hover:bg-emerald-50 hover:text-emerald-700'
                       }`}
                   >
-                    <Icon className={`w-[18px] h-[18px] flex-shrink-0 ${active ? 'text-emerald-600' : ''}`} />
+                    <item.icon className={`w-[18px] h-[18px] flex-shrink-0 ${active ? 'text-emerald-600' : ''}`} />
                     {item.label}
                   </Link>
                 );
               })}
-          </nav>
-        </div>
+            </nav>
+          </div>
+        )}
 
         {/* Admin Section */}
         {isStaffRole(user?.role) && (
           <div className="px-3 mt-4">
-            <p className="px-3 mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Menu Admin</p>
+            <p className="px-3 mb-1.5 text-[11px] font-semibold uppercase tracking-wider text-gray-400">Menu Utama</p>
             <nav className="space-y-0.5">
-              {adminItems.filter((item) => {
-                const role = user?.role;
-                if (isAdminRole(role)) {
-                  return ['/admin/dashboard', '/admin/users', '/admin/register', '/admin/ai', '/admin/broadcast'].includes(item.to);
-                }
-
-                if (isHeadRole(role)) {
-                  return ['/admin/dashboard', '/admin/patients', '/admin/announcements', '/admin/schedules', '/admin/broadcast'].includes(item.to);
-                }
-
-                if (role === 'nurse') {
-                  return ['/admin/dashboard', '/admin/announcements', '/admin/schedules'].includes(item.to);
-                }
-
-                return false;
-              }).map((item) => {
+              {(isAdminRole(user?.role) ? adminNav : isHeadRole(user?.role) ? headNav : nurseNav).map((item) => {
                 const active = isActive(item.to);
                 return (
                   <Link

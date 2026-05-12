@@ -44,6 +44,36 @@ interface FonnteStatusData {
   detail?: string;
   quota?: number | null;
   device?: Record<string, unknown>;
+  rateLimited?: boolean;
+  cached?: boolean;
+  stale?: boolean;
+  deviceStatus?: string;
+  raw?: Record<string, unknown>;
+}
+
+const FONNTE_STATUS_CACHE_KEY = 'puskesbot:fonnte-status-cache:v1';
+
+function readCachedFonnteStatus(): FonnteStatusData | null {
+  try {
+    const raw = localStorage.getItem(FONNTE_STATUS_CACHE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as FonnteStatusData & { cachedAt?: string };
+    if (!parsed || typeof parsed !== 'object') return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function saveCachedFonnteStatus(status: FonnteStatusData): void {
+  try {
+    localStorage.setItem(FONNTE_STATUS_CACHE_KEY, JSON.stringify({
+      ...status,
+      cachedAt: new Date().toISOString(),
+    }));
+  } catch {
+    // ignore cache failures
+  }
 }
 
 function getActorEmail(): string {
@@ -72,7 +102,8 @@ const BroadcastManager = () => {
   const [contacts, setContacts] = useState<BroadcastContact[]>([]);
   const [stats, setStats] = useState({
     totalUsers: 0,
-    usersWithPhone: 0,
+    totalPatients: 0,
+    patientsWithPhone: 0,
     registrationRate: '0'
   });
   const [copySuccess, setCopySuccess] = useState(false);
@@ -101,7 +132,7 @@ const BroadcastManager = () => {
   const adminEmail = getActorEmail();
   const canSendBroadcast = isHeadRole(currentRole) || isAdminRole(currentRole);
   const isHeadBroadcaster = isHeadRole(currentRole);
-  const canSendIndividual = isAdminRole(currentRole);
+  const canSendIndividual = isHeadRole(currentRole);
   const facilityName = publicInfo.name || 'Puskesmas';
   const facilityTeamName = publicInfo.name ? `Tim ${publicInfo.name}` : 'Tim Layanan';
   const facilityWebsiteLabel = publicLinks.website || publicInfo.website || '[website layanan]';
@@ -139,9 +170,35 @@ const BroadcastManager = () => {
       return;
     }
 
+    const cachedStatus = readCachedFonnteStatus();
+    if (cachedStatus) {
+      setFonnteStatus(cachedStatus);
+    }
+
     loadData();
-    checkFonnteStatus();
+    void checkFonnteStatus(false); // Use backend cache on page load
     loadLogs();
+
+    // Realtime: refresh contacts/stats periodically and on user updates
+    const handleUserUpdated = () => {
+      void loadData();
+    };
+
+    window.addEventListener('userUpdated', handleUserUpdated);
+    // Auto-refresh contacts every 5 seconds
+    const dataInterval = window.setInterval(() => {
+      void loadData();
+    }, 5000);
+    // Auto-refresh Fonnte status every 5 minutes to avoid hammering the gateway
+    const statusInterval = window.setInterval(() => {
+      void checkFonnteStatus(false);
+    }, 300000);
+
+    return () => {
+      window.removeEventListener('userUpdated', handleUserUpdated);
+      window.clearInterval(dataInterval);
+      window.clearInterval(statusInterval);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
@@ -149,17 +206,34 @@ const BroadcastManager = () => {
     const broadcastContacts = await getBroadcastContacts();
     setContacts(broadcastContacts);
     const userStats = await getUserStats();
-    setStats(userStats);
+    setStats(userStats as unknown as typeof stats);
   };
 
-  const checkFonnteStatus = useCallback(async () => {
+  const checkFonnteStatus = useCallback(async (force?: boolean) => {
     setStatusLoading(true);
     try {
-      const data = await api.fonnteStatus(adminEmail);
+      const data = await api.fonnteStatus(adminEmail, !!force);
       setFonnteStatus(data);
+      saveCachedFonnteStatus(data);
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
-      setFonnteStatus({ connected: false, configured: false, message: msg });
+      const cachedStatus = readCachedFonnteStatus();
+      if (cachedStatus) {
+        setFonnteStatus({
+          ...cachedStatus,
+          cached: true,
+          stale: true,
+          message: msg,
+        });
+        return;
+      }
+
+      setFonnteStatus({
+        connected: false,
+        configured: true,
+        rateLimited: true,
+        message: msg,
+      });
     } finally {
       setStatusLoading(false);
     }
@@ -200,7 +274,7 @@ const BroadcastManager = () => {
       alert('Pesan broadcast tidak boleh kosong!');
       return;
     }
-    if (!confirm(`Kirim broadcast ke ${stats.usersWithPhone} pasien?\n\nPesan:\n${broadcastMsg.substring(0, 200)}...`)) {
+    if (!confirm(`Kirim broadcast ke ${stats.patientsWithPhone} pasien?\n\nPesan:\n${broadcastMsg.substring(0, 200)}...`)) {
       return;
     }
 
@@ -219,6 +293,7 @@ const BroadcastManager = () => {
       });
       if (data.success) {
         loadLogs();
+        void loadData();
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -231,7 +306,7 @@ const BroadcastManager = () => {
   // Send individual
   const handleSendIndividual = async () => {
     if (!canSendIndividual) {
-      alert('Fitur kirim pesan personal hanya untuk Admin IT Manager.');
+      alert('Fitur kirim pesan personal hanya untuk Kepala Puskesmas.');
       return;
     }
 
@@ -255,6 +330,7 @@ const BroadcastManager = () => {
       });
       if (data.success) {
         loadLogs();
+        void loadData();
       }
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -270,15 +346,15 @@ const BroadcastManager = () => {
     contact.email.toLowerCase().includes(searchTerm.toLowerCase())
   );
 
-  const tabs: Array<{
+  type TabItem = {
     key: 'broadcast' | 'individual' | 'contacts' | 'logs';
     label: string;
     icon: React.ReactNode;
-  }> = [
+  };
+
+  const tabs: TabItem[] = [
     { key: 'broadcast', label: 'Broadcast Massal', icon: <FaBroadcastTower className="mr-2" /> },
-    ...(isAdminRole(currentRole)
-      ? [{ key: 'individual', label: 'Kirim Personal', icon: <FaPaperPlane className="mr-2" /> } as const]
-      : []),
+    ...(canSendIndividual ? [{ key: 'individual' as const, label: 'Kirim Personal', icon: <FaPaperPlane className="mr-2" /> }] : []),
     { key: 'contacts', label: 'Daftar Kontak', icon: <FaUsers className="mr-2" /> },
     { key: 'logs', label: 'Riwayat Kirim', icon: <FaHistory className="mr-2" /> },
   ];
@@ -300,8 +376,8 @@ const BroadcastManager = () => {
         </div>
 
         {isHeadBroadcaster && (
-          <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-            Mode Kepala Puskesmas aktif. Pengiriman personal per pasien tetap dibatasi untuk Admin IT Manager.
+          <div className="mb-6 rounded-lg border border-emerald-100 bg-emerald-50 px-4 py-3 text-sm text-emerald-800">
+            Mode Kepala Puskesmas aktif. Kepala dapat mengirim broadcast resmi dan pesan personal via gateway.
           </div>
         )}
 
@@ -321,6 +397,10 @@ const BroadcastManager = () => {
                   Status Fonnte:{' '}
                   {statusLoading ? (
                     <span className="text-gray-500">Memeriksa...</span>
+                  ) : fonnteStatus?.rateLimited ? (
+                    <span className="text-amber-700">
+                      Pemeriksaan dibatasi — {fonnteStatus.cached ? 'menampilkan status terakhir' : 'status sementara belum tersedia'}
+                    </span>
                   ) : fonnteStatus?.connected ? (
                     <span className="text-green-700">Terhubung</span>
                   ) : fonnteStatus?.configured ? (
@@ -336,10 +416,13 @@ const BroadcastManager = () => {
                 {fonnteStatus?.quota != null && (
                   <p className="text-xs text-gray-600 mt-1">Sisa quota: {fonnteStatus.quota} pesan</p>
                 )}
+                {fonnteStatus?.cached && !statusLoading && (
+                  <p className="text-xs text-gray-500 mt-1">Menampilkan status terakhir yang tersimpan.</p>
+                )}
               </div>
             </div>
             <button
-              onClick={checkFonnteStatus}
+              onClick={() => checkFonnteStatus(false)}
               disabled={statusLoading}
               className="text-sm px-3 py-1 rounded border border-gray-300 bg-white hover:bg-gray-50 flex items-center gap-1"
             >
@@ -363,8 +446,8 @@ const BroadcastManager = () => {
           <div className="bg-green-50 rounded-lg p-6 border border-green-200">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-green-600 text-sm font-medium">User dengan No. HP</p>
-                <p className="text-3xl font-bold text-green-800">{stats.usersWithPhone}</p>
+                <p className="text-green-600 text-sm font-medium">Total Pasien</p>
+                <p className="text-3xl font-bold text-green-800">{stats.totalPatients}</p>
               </div>
               <FaPhone className="text-4xl text-green-400" />
             </div>
@@ -372,8 +455,8 @@ const BroadcastManager = () => {
           <div className="bg-purple-50 rounded-lg p-6 border border-purple-200">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-purple-600 text-sm font-medium">% Registrasi Lengkap</p>
-                <p className="text-3xl font-bold text-purple-800">{stats.registrationRate}%</p>
+                <p className="text-purple-600 text-sm font-medium">Pasien dengan No. HP</p>
+                <p className="text-3xl font-bold text-purple-800">{stats.patientsWithPhone}</p>
               </div>
               <FaWhatsapp className="text-4xl text-purple-400" />
             </div>
@@ -406,7 +489,7 @@ const BroadcastManager = () => {
                 Kirim Broadcast ke Semua Pasien
               </h2>
               <p className="text-sm text-gray-500 mb-4">
-                Pesan akan dikirim ke <strong>{stats.usersWithPhone}</strong> pasien yang memiliki nomor telepon.
+                Pesan akan dikirim ke <strong>{stats.patientsWithPhone}</strong> pasien yang memiliki nomor telepon.
                 Gunakan <code className="bg-gray-100 px-1 rounded">{'{name}'}</code> untuk menyisipkan nama pasien secara otomatis.
               </p>
 
@@ -469,7 +552,7 @@ const BroadcastManager = () => {
                   ) : (
                     <>
                       <Send className="w-5 h-5" />
-                      Kirim Broadcast ke {stats.usersWithPhone} Pasien
+                      Kirim Broadcast ke {stats.patientsWithPhone} Pasien
                     </>
                   )}
                 </button>
@@ -699,14 +782,14 @@ const BroadcastManager = () => {
                                 setActiveTab('individual');
                                 setIndividualResult(null);
                               }}
-                              disabled={!isAdminRole(currentRole)}
-                              className={`text-xs px-3 py-1 rounded-full transition-colors flex items-center gap-1 ${isAdminRole(currentRole)
+                              disabled={!canSendIndividual}
+                              className={`text-xs px-3 py-1 rounded-full transition-colors flex items-center gap-1 ${canSendIndividual
                                 ? 'bg-green-100 text-green-700 hover:bg-green-200'
                                 : 'bg-gray-100 text-gray-400 cursor-not-allowed'
                                 }`}
                             >
                               <FaPaperPlane className="text-[10px]" />
-                              {isAdminRole(currentRole) ? 'Kirim' : 'Monitor'}
+                              {canSendIndividual ? 'Kirim' : 'Lihat'}
                             </button>
                           </td>
                         </tr>

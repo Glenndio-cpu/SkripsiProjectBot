@@ -11,6 +11,8 @@ export interface RegisterPayload {
     email: string;
     phone?: string;
     ktp?: string;
+    ktpImage?: string;
+    ktpWithOwnerImage?: string;
     gender: 'male' | 'female';
     age: number;
     medicalHistory: string;
@@ -22,7 +24,59 @@ export interface UpdateProfilePayload {
     name?: string;
     phone?: string;
     ktp?: string;
+    ktpImage?: string;
+    ktpWithOwnerImage?: string;
     profileImage?: string;
+    medicalHistory?: string;
+}
+
+export interface PatientComplaint {
+    id: number;
+    complaint: string;
+    complaintDate: string;
+    createdAt?: string;
+    updatedAt?: string;
+}
+
+export interface PatientComplaintListResponse {
+    complaints: PatientComplaint[];
+    latest?: PatientComplaint | null;
+}
+
+export interface UpdatePatientComplaintPayload {
+    email: string;
+    complaint: string;
+    complaintDate?: string;
+}
+
+export type RegistrationStatus = 'pending' | 'approved' | 'rejected';
+
+export interface PendingRegistrationUser {
+    email: string;
+    name: string;
+    phone?: string;
+    ktp?: string;
+    ktpImage?: string;
+    ktpWithOwnerImage?: string;
+    gender?: string;
+    age?: number;
+    medicalHistory?: string;
+    registrationStatus?: RegistrationStatus;
+    registrationNote?: string;
+    registrationReviewedBy?: string;
+    registrationReviewedAt?: string;
+    createdAt?: string;
+    whatsappLink?: string;
+}
+
+export interface PendingRegistrationListResponse {
+    pending: PendingRegistrationUser[];
+    count: number;
+}
+
+export interface ReviewPendingRegistrationPayload {
+    action: 'approve' | 'reject';
+    note?: string;
 }
 
 export interface CreateUserPayload {
@@ -31,6 +85,11 @@ export interface CreateUserPayload {
     password: string;
     phone?: string;
     ktp?: string;
+    ktpImage?: string;
+    ktpWithOwnerImage?: string;
+    gender?: 'male' | 'female';
+    age?: number;
+    medicalHistory?: string;
     role?: UserRole;
 }
 
@@ -46,6 +105,7 @@ export interface ContactEmailPayload {
     from_email: string;
     subject: string;
     message: string;
+    captcha_token?: string;
 }
 
 export interface CreateAnnouncementPayload {

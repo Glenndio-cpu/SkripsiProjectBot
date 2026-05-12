@@ -65,6 +65,13 @@ const resolveFirstAvailableSource = async (sources: string[]): Promise<string | 
 
 const Index = () => {
   const [visibleHeroGallery, setVisibleHeroGallery] = React.useState<ResolvedHeroImage[]>([]);
+  const hasHeroImages = visibleHeroGallery.length > 0;
+
+  const removeBrokenHeroImage = React.useCallback((brokenSource: string) => {
+    setVisibleHeroGallery((currentImages) =>
+      currentImages.filter((image) => image.src !== brokenSource)
+    );
+  }, []);
 
   React.useEffect(() => {
     let isActive = true;
@@ -101,8 +108,10 @@ const Index = () => {
 
       {/* Hero */}
       <section className="py-12 md:py-20 lg:py-24">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 lg:grid-cols-2 gap-10 lg:gap-16 items-center">
-          <div className="text-center lg:text-left order-2 lg:order-1">
+        <div
+          className={`max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 grid grid-cols-1 ${hasHeroImages ? 'lg:grid-cols-2' : ''} gap-10 lg:gap-16 items-center`}
+        >
+          <div className={`text-center lg:text-left ${hasHeroImages ? 'order-2 lg:order-1' : ''}`}>
             <h1 className="text-3xl sm:text-4xl md:text-5xl font-extrabold text-slate-700 leading-tight mb-5">
               Puskesmas Wori <span className="text-emerald-500">Online</span>
             </h1>
@@ -126,30 +135,35 @@ const Index = () => {
               </Link>
             </div>
           </div>
-          <div className="flex justify-center order-1 lg:order-2">
-            <div className="w-full max-w-sm sm:max-w-md lg:max-w-lg">
-              {visibleHeroGallery.length > 0 && (
+          {hasHeroImages && (
+            <div className="flex justify-center order-1 lg:order-2">
+              <div className="w-full max-w-sm sm:max-w-md lg:max-w-lg">
                 <Carousel opts={{ loop: true }} className="w-full">
                   <CarouselContent>
                     {visibleHeroGallery.map((image) => (
-                      <CarouselItem key={image.alt}>
+                      <CarouselItem key={image.src}>
                         <div className="overflow-hidden rounded-2xl shadow-lg border border-slate-100 bg-white">
                           <img
                             src={image.src}
                             alt={image.alt}
                             className="w-full h-[240px] sm:h-[300px] lg:h-[360px] object-cover"
                             loading="lazy"
+                            onError={() => removeBrokenHeroImage(image.src)}
                           />
                         </div>
                       </CarouselItem>
                     ))}
                   </CarouselContent>
-                  <CarouselPrevious className="left-2 md:left-3 bg-white/90 border-slate-200 hover:bg-white" />
-                  <CarouselNext className="right-2 md:right-3 bg-white/90 border-slate-200 hover:bg-white" />
+                  {visibleHeroGallery.length > 1 && (
+                    <>
+                      <CarouselPrevious className="left-2 md:left-3 bg-white/90 border-slate-200 hover:bg-white" />
+                      <CarouselNext className="right-2 md:right-3 bg-white/90 border-slate-200 hover:bg-white" />
+                    </>
+                  )}
                 </Carousel>
-              )}
+              </div>
             </div>
-          </div>
+          )}
         </div>
       </section>
 

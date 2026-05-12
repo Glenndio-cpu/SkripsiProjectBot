@@ -10,6 +10,7 @@ from app.store import (
     find_user_by_ktp,
     suggest_similar_email,
     add_user,
+    upsert_patient_complaint,
     update_user,
     delete_user,
 )
@@ -67,6 +68,8 @@ def register():
         phone = body.get('phone', '').strip()
         password = body.get('password', '')
         ktp = (body.get('ktp') or '').strip()
+        ktp_image = (body.get('ktpImage') or '').strip()
+        ktp_with_owner_image = (body.get('ktpWithOwnerImage') or '').strip()
         gender = (body.get('gender') or '').strip().lower()
         medical_history = (body.get('medicalHistory') or '').strip()
         raw_age = body.get('age')
@@ -120,15 +123,27 @@ def register():
             'gender': gender,
             'age': age,
             'medicalHistory': medical_history,
+            'registrationStatus': 'pending',
+            'registrationNote': 'Menunggu validasi KTP dari tenaga medis.',
             'password': _hash_password(password),
             'profileImage': '',
+            'ktpImage': ktp_image or '',
+            'ktpWithOwnerImage': ktp_with_owner_image or '',
             'role': ROLE_PATIENT,
             'createdAt': datetime.utcnow().isoformat(),
         }
 
         add_user(user)
-        login_session(user)
-        return jsonify(message='Registrasi berhasil', user=_serialize_user(user)), 201
+        try:
+            upsert_patient_complaint(user['email'], medical_history)
+        except Exception:
+            delete_user(user['email'])
+            raise
+        return jsonify(
+            message='Registrasi berhasil. Akun Anda menunggu validasi tenaga medis.',
+            user=_serialize_user(user),
+            requiresApproval=True,
+        ), 201
 
     except Exception as e:
         print(f'Register Error: {e}')
@@ -169,11 +184,27 @@ def login():
             return jsonify(error='Anda memasukkan password yang salah!'), 401
 
         user_role = user.get('role') or ROLE_PATIENT
+        registration_status = (user.get('registrationStatus') or 'approved').strip().lower()
+        registration_note = (user.get('registrationNote') or '').strip()
 
         if selected_role == ROLE_ADMIN and user_role not in STAFF_ROLES:
             return jsonify(error='Akun ini bukan akun staf. Pilih "Login sebagai Pasien".'), 403
         if selected_role == ROLE_PATIENT and user_role in STAFF_ROLES:
             return jsonify(error='Akun ini terdaftar sebagai staf. Pilih "Login sebagai Admin/Staf".'), 403
+
+        if selected_role == ROLE_PATIENT and user_role == ROLE_PATIENT and registration_status != 'approved':
+            if registration_status == 'pending':
+                msg = 'Akun Anda masih menunggu approval tenaga medis. Silakan tunggu konfirmasi.'
+            else:
+                msg = 'Pendaftaran Anda belum disetujui tenaga medis. Silakan hubungi Puskesmas Wori.'
+            if registration_note:
+                msg = f'{msg} Catatan: {registration_note}'
+            return jsonify(
+                error=msg,
+                registrationStatus=registration_status,
+                registrationNote=registration_note,
+                requiresApproval=True,
+            ), 403
 
         login_session(user)
         return jsonify(message='Login berhasil', user=_serialize_user(user))
@@ -181,6 +212,46 @@ def login():
     except Exception as e:
         print(f'Login Error: {e}')
         return jsonify(error='Terjadi kesalahan saat login'), 500
+
+
+# ── GET /api/auth/registration-status ───────────────────────────────────
+
+@auth_bp.route('/registration-status', methods=['GET'])
+def registration_status():
+    try:
+        identifier = (request.args.get('identifier') or '').strip()
+        if not identifier:
+            return jsonify(error='Identifier wajib diisi'), 400
+
+        is_phone = bool(re.match(r'^[0-9+\s\-\(\)]+$', identifier))
+        if is_phone:
+            clean = re.sub(r'[\s\-\(\)]', '', identifier)
+            user = find_user_by_phone(clean)
+        else:
+            user = find_user_by_email(identifier)
+
+        if not user:
+            return jsonify(error='Data pendaftaran tidak ditemukan'), 404
+
+        if (user.get('role') or ROLE_PATIENT) != ROLE_PATIENT:
+            return jsonify(error='Status pendaftaran hanya tersedia untuk akun pasien'), 400
+
+        status = (user.get('registrationStatus') or 'approved').strip().lower()
+        note = (user.get('registrationNote') or '').strip()
+
+        return jsonify(
+            registrationStatus=status,
+            registrationNote=note,
+            reviewedBy=user.get('registrationReviewedBy') or None,
+            reviewedAt=user.get('registrationReviewedAt') or None,
+            name=user.get('name') or '',
+            email=user.get('email') or '',
+            phone=user.get('phone') or '',
+            approved=(status == 'approved'),
+        )
+    except Exception as e:
+        print(f'Registration Status Error: {e}')
+        return jsonify(error='Gagal mengecek status pendaftaran'), 500
 
 
 # ── POST /api/auth/change-password ───────────────────────────────────────

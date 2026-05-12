@@ -1,9 +1,12 @@
 import os
+import traceback
+import uuid
 from datetime import timedelta
-from flask import Flask, session
+from flask import Flask, session, request, jsonify
 from flask_cors import CORS
 from dotenv import load_dotenv
 from pathlib import Path
+from werkzeug.exceptions import HTTPException
 
 ENV_FILE = Path(__file__).resolve().parent.parent / '.env'
 load_dotenv(ENV_FILE, override=True)
@@ -87,8 +90,51 @@ def create_app():
     # Global error handler
     @app.errorhandler(Exception)
     def handle_exception(e):
-        app.logger.error(f'Server Error: {e}')
-        code = getattr(e, 'code', 500)
-        return {'error': str(e)}, code
+        error_id = str(uuid.uuid4())
+
+        if isinstance(e, HTTPException):
+            code = e.code or 500
+            message = e.description or e.name or 'Request error'
+            app.logger.info(
+                f'[{error_id}] HTTP {code} {request.method} {request.path} - {message}'
+            )
+            return jsonify({'error': {'message': message, 'code': code, 'id': error_id}}), code
+
+        app.logger.error(
+            f'[{error_id}] Unhandled error {request.method} {request.path}: {e}\n{traceback.format_exc()}'
+        )
+        return (
+            jsonify({'error': {'message': 'Internal server error', 'code': 500, 'id': error_id}}),
+            500,
+        )
+
+    @app.after_request
+    def set_security_headers(response):
+        # Security headers to improve baseline security posture.
+        response.headers.setdefault('X-Content-Type-Options', 'nosniff')
+        response.headers.setdefault('X-Frame-Options', 'DENY')
+        response.headers.setdefault('Referrer-Policy', 'strict-origin-when-cross-origin')
+        response.headers.setdefault('Permissions-Policy', 'geolocation=(), microphone=(), camera=(self)')
+        response.headers.setdefault(
+            'Content-Security-Policy',
+            "default-src 'self' https: data: blob:; "
+            "base-uri 'self'; "
+            "frame-ancestors 'none'; "
+            "form-action 'self' https:; "
+            "object-src 'none'; "
+            "img-src 'self' https: data: blob:; "
+            "script-src 'self' https: 'unsafe-inline' 'unsafe-eval'; "
+            "style-src 'self' https: 'unsafe-inline'; "
+            "connect-src 'self' https: wss:; "
+            "font-src 'self' https: data:"
+        )
+
+        if os.getenv('ENABLE_HSTS', 'true').lower() == 'true':
+            response.headers.setdefault(
+                'Strict-Transport-Security',
+                'max-age=31536000; includeSubDomains; preload'
+            )
+
+        return response
 
     return app

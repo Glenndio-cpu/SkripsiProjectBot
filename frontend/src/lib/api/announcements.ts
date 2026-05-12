@@ -1,4 +1,4 @@
-import { request } from './core';
+import { API_BASE, request } from './core';
 import type {
     AnnouncementCategory,
     CreateAnnouncementPayload,
@@ -6,10 +6,34 @@ import type {
     UpdateAnnouncementPayload,
 } from './types';
 
+function buildAbsoluteApiUrl(endpoint: string): string {
+    const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+
+    if (API_BASE.startsWith('http://') || API_BASE.startsWith('https://')) {
+        return `${API_BASE}${normalizedEndpoint}`;
+    }
+
+    if (typeof window === 'undefined') {
+        return `${API_BASE}${normalizedEndpoint}`;
+    }
+
+    return `${window.location.origin}${API_BASE}${normalizedEndpoint}`;
+}
+
 export const announcementsApi = {
     getPublicAnnouncements: (opts?: { category?: AnnouncementCategory }) => {
         const query = opts?.category ? `?category=${encodeURIComponent(opts.category)}` : '';
         return request(`/announcements/public${query}`);
+    },
+
+    getPublicAnnouncementsStreamUrl: (opts?: { category?: AnnouncementCategory; interval?: number }) => {
+        const params = new URLSearchParams();
+        if (opts?.category) params.set('category', opts.category);
+        if (typeof opts?.interval === 'number' && Number.isFinite(opts.interval)) {
+            params.set('interval', String(Math.round(opts.interval)));
+        }
+        const query = params.toString();
+        return buildAbsoluteApiUrl(`/announcements/public/stream${query ? `?${query}` : ''}`);
     },
 
     // adminEmail kept for backward compatibility in callers; backend auth uses session.

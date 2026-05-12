@@ -7,7 +7,9 @@ import type {
 
 export const fonnteApi = {
     // adminEmail kept for backward compatibility in callers; backend auth uses session.
-    fonnteStatus: (_adminEmail?: string) => request('/fonnte/status'),
+    // force=true bypasses server-side cache for manual Refresh clicks
+    fonnteStatus: (_adminEmail?: string, force?: boolean) =>
+        request(`/fonnte/status${force ? '?force=true' : ''}`),
 
     fonnteSend: ({ adminEmail: _adminEmail, ...data }: FonnteSendPayload) =>
         request('/fonnte/send', {

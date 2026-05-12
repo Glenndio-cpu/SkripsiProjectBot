@@ -2,7 +2,8 @@ import React, { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
 import api from '../lib/api';
-import { isStaffRole } from '../lib/roles';
+import { isStaffRole, isAdminRole, isHeadRole } from '../lib/roles';
+import { trackDailyActivity } from '../lib/userActivityTracking';
 import { Eye, EyeOff, LogIn, Shield, User } from 'lucide-react';
 
 const Login = () => {
@@ -55,17 +56,39 @@ const Login = () => {
       // Dispatch event for other components
       window.dispatchEvent(new Event('userUpdated'));
 
+      // Track daily activity so staff can see realtime status
+      trackDailyActivity();
+
       setIsLoading(false);
 
       // Redirect berdasarkan role
       if (isStaffRole(data.user.role)) {
-        navigate('/admin/dashboard');
+        if (isAdminRole(data.user.role)) {
+          navigate('/admin/users');
+        } else {
+          // Head and Nurse -> dashboard
+          navigate('/admin/dashboard');
+        }
       } else {
         navigate('/');
       }
     } catch (error: any) {
       console.error('Login error:', error);
-      setError(error.message || 'Terjadi kesalahan saat login. Silakan coba lagi.');
+      const msg = error.message || 'Terjadi kesalahan saat login. Silakan coba lagi.';
+      setError(msg);
+
+      const lower = String(msg).toLowerCase();
+      if (lower.includes('menunggu approval')) {
+        navigate('/approval-waiting', {
+          state: {
+            identifier: formData.identifier,
+            registrationStatus: 'pending',
+            registrationNote: msg,
+          },
+          replace: true,
+        });
+      }
+
       setIsLoading(false);
     }
   };

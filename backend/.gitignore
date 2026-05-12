@@ -45,6 +45,7 @@ htmlcov/
 *.sqlite
 *.sqlite3
 *.rdb
+.chat_quota.json
 
 # OS and editor
 .DS_Store

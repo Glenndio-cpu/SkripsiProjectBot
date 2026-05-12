@@ -1,10 +1,13 @@
 
+/* Cache-bust marker: 2026-04-21 */
+
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
 @layer base {
   :root {
+    --build-version: 20260421;
     --background: 156 33% 97%;
     --foreground: 172 19% 18%;
 
@@ -195,5 +198,18 @@
 
   .figma-btn-secondary {
     @apply inline-flex items-center justify-center gap-2 rounded-xl border border-emerald-200 bg-white px-4 py-2.5 text-sm font-medium text-emerald-700 transition-colors hover:bg-emerald-50;
+  }
+}
+
+/* Mobile fixes: hide Cloudflare Turnstile badge and ensure it doesn't overlap content */
+@media (max-width: 640px) {
+  iframe[src*="challenges.cloudflare.com"],
+  .cf-turnstile,
+  .cf-turnstile-badge,
+  .cf-badge,
+  .cloudflare-badge {
+    display: none !important;
+    visibility: hidden !important;
+    pointer-events: none !important;
   }
 }

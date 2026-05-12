@@ -39,9 +39,9 @@ const ProtectedRoute: React.FC<ProtectedRouteProps> = ({ allow, children }) => {
       return <Navigate to="/" replace />;
     }
 
-    // Admin trying to access patient pages → redirect to admin dashboard
+    // Admin trying to access patient pages → redirect to user management
     if (user.role === 'admin') {
-      return <Navigate to="/admin/dashboard" replace />;
+      return <Navigate to="/admin/users" replace />;
     }
 
     // Patient trying to access admin pages → redirect to home

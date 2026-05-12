@@ -7,6 +7,7 @@ import type { PatientNotification } from '../lib/api';
 import { AlertTriangle, Camera, Phone, Mail, X, Trash2, Lock, User, Activity, CalendarDays, BarChart3, Users, Megaphone, UserPlus, Bell } from 'lucide-react';
 import { getUserStats } from '../lib/userActivityTracking';
 import { isAdminRole, isStaffRole, roleLabel } from '../lib/roles';
+import { useRealtimeUser } from '../hooks/use-realtime-user';
 
 function isWhatsappReady(phone?: string): boolean {
   if (!phone) return false;
@@ -32,10 +33,35 @@ interface ActivityRecord {
   [key: string]: unknown;
 }
 
+const readStoredUser = (): { name: string; email: string; phone?: string; ktp?: string; medicalHistory?: string; profileImage?: string; role?: string } | null => {
+  try {
+    const raw = localStorage.getItem('user');
+    if (!raw) return null;
+
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== 'object') return null;
+
+    const candidate = parsed as Record<string, unknown>;
+    return {
+      name: typeof candidate.name === 'string' ? candidate.name : '',
+      email: typeof candidate.email === 'string' ? candidate.email : '',
+      phone: typeof candidate.phone === 'string' ? candidate.phone : '',
+      ktp: typeof candidate.ktp === 'string' ? candidate.ktp : '',
+      medicalHistory: typeof candidate.medicalHistory === 'string' ? candidate.medicalHistory : '',
+      profileImage: typeof candidate.profileImage === 'string' ? candidate.profileImage : '',
+      role: typeof candidate.role === 'string' ? candidate.role : undefined,
+    };
+  } catch {
+    localStorage.removeItem('user');
+    return null;
+  }
+};
+
 const Profile = () => {
   const navigate = useNavigate();
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const [user, setUser] = useState<{ name: string; email: string; phone?: string; ktp?: string; profileImage?: string; role?: string } | null>(null);
+  const realtimeUser = useRealtimeUser();
+  const [user, setUser] = useState<{ name: string; email: string; phone?: string; ktp?: string; medicalHistory?: string; profileImage?: string; role?: string } | null>(null);
   const [isEditing, setIsEditing] = useState(false);
   const [profileImage, setProfileImage] = useState<string>('');
   const [isCropModalOpen, setIsCropModalOpen] = useState(false);
@@ -53,17 +79,17 @@ const Profile = () => {
     currentPassword: '',
     newPassword: '',
     confirmPassword: '',
-    ktp: ''
+    ktp: '',
+    medicalHistory: '',
   });
 
   useEffect(() => {
-    const userData = localStorage.getItem('user');
-    if (!userData) {
+    const parsedUser = readStoredUser();
+    if (!parsedUser) {
       navigate('/login');
       return;
     }
 
-    const parsedUser = JSON.parse(userData);
     if (parsedUser.role === 'public') {
       navigate('/konsultasi');
       return;
@@ -76,7 +102,8 @@ const Profile = () => {
       name: parsedUser.name,
       email: parsedUser.email,
       phone: parsedUser.phone || '',
-      ktp: parsedUser.ktp || ''
+      ktp: parsedUser.ktp || '',
+      medicalHistory: parsedUser.medicalHistory || '',
     }));
 
     // Only load stats for patients, not staff roles
@@ -91,6 +118,85 @@ const Profile = () => {
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (!realtimeUser || realtimeUser.role === 'public') return;
+
+    const name = typeof realtimeUser.name === 'string' ? realtimeUser.name : '';
+    const email = typeof realtimeUser.email === 'string' ? realtimeUser.email : '';
+    const phone = typeof realtimeUser.phone === 'string' ? realtimeUser.phone : '';
+    const ktp = typeof realtimeUser.ktp === 'string' ? realtimeUser.ktp : '';
+    const medicalHistory = typeof realtimeUser.medicalHistory === 'string' ? realtimeUser.medicalHistory : '';
+    const profileImage = typeof realtimeUser.profileImage === 'string' ? realtimeUser.profileImage : '';
+    const role = typeof realtimeUser.role === 'string' ? realtimeUser.role : undefined;
+
+    setUser((prev) => ({
+      name: name || prev?.name || '',
+      email: email || prev?.email || '',
+      phone,
+      ktp,
+      medicalHistory,
+      profileImage,
+      role,
+    }));
+    setProfileImage(profileImage);
+
+    if (!isEditing) {
+      setFormData((prev) => ({
+        ...prev,
+        name: name || prev.name,
+        email: email || prev.email,
+        phone,
+        ktp,
+        medicalHistory,
+      }));
+    }
+  }, [isEditing, realtimeUser]);
+
+  useEffect(() => {
+    if (!user?.email || isEditing) return;
+
+    let isMounted = true;
+    const intervalMs = 6000;
+
+    const normalizeUser = (value: any) => ({
+      email: typeof value?.email === 'string' ? value.email : '',
+      name: typeof value?.name === 'string' ? value.name : '',
+      phone: typeof value?.phone === 'string' ? value.phone : '',
+      ktp: typeof value?.ktp === 'string' ? value.ktp : '',
+      gender: typeof value?.gender === 'string' ? value.gender : '',
+      age: typeof value?.age === 'number' ? value.age : (value?.age ?? null),
+      medicalHistory: typeof value?.medicalHistory === 'string' ? value.medicalHistory : '',
+      profileImage: typeof value?.profileImage === 'string' ? value.profileImage : '',
+      role: typeof value?.role === 'string' ? value.role : 'patient',
+    });
+
+    const syncProfile = async () => {
+      try {
+        const data = await api.me();
+        if (!isMounted || !data?.user) return;
+
+        const serverUser = normalizeUser(data.user);
+        const localRaw = localStorage.getItem('user');
+        const localUser = localRaw ? normalizeUser(JSON.parse(localRaw)) : null;
+
+        if (!localUser || JSON.stringify(localUser) !== JSON.stringify(serverUser)) {
+          localStorage.setItem('user', JSON.stringify(serverUser));
+          window.dispatchEvent(new Event('userUpdated'));
+        }
+      } catch (error) {
+        // ignore sync errors; auth guard will handle invalid sessions
+      }
+    };
+
+    void syncProfile();
+    const timer = window.setInterval(syncProfile, intervalMs);
+
+    return () => {
+      isMounted = false;
+      window.clearInterval(timer);
+    };
+  }, [isEditing, user?.email]);
 
   const loadPatientNotifications = async () => {
     setNotificationsLoading(true);
@@ -129,7 +235,7 @@ const Profile = () => {
     }
   };
 
-  const handleChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setFormData({ ...formData, [e.target.name]: e.target.value });
   };
 
@@ -159,7 +265,7 @@ const Profile = () => {
   const handleCropComplete = (croppedImageUrl: string) => {
     setProfileImage(croppedImageUrl);
 
-    const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+    const currentUser = readStoredUser() || { name: '', email: '', role: undefined };
     const updatedUser = { ...currentUser, profileImage: croppedImageUrl };
     localStorage.setItem('user', JSON.stringify(updatedUser));
     setUser(updatedUser);
@@ -174,7 +280,7 @@ const Profile = () => {
   const handleRemoveImage = () => {
     setProfileImage('');
 
-    const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+    const currentUser = readStoredUser() || { name: '', email: '', role: undefined };
     const updatedUser = { ...currentUser, profileImage: '' };
     localStorage.setItem('user', JSON.stringify(updatedUser));
     setUser(updatedUser);
@@ -191,8 +297,10 @@ const Profile = () => {
 
     const cleanPhone = formData.phone ? formData.phone.replace(/[\s()-]/g, '') : '';
     const phoneRegex = /^[0-9]{10,15}$/;
+    const isPatient = !isStaffRole(user?.role);
+    const complaintText = formData.medicalHistory.trim();
 
-    if (!isStaffRole(user?.role) && !cleanPhone) {
+    if (isPatient && !cleanPhone) {
       alert('Nomor WhatsApp pasien wajib diisi untuk menerima broadcast.');
       return;
     }
@@ -209,13 +317,19 @@ const Profile = () => {
       return;
     }
 
+    if (isPatient && !complaintText) {
+      alert('Keluhan pasien wajib diisi');
+      return;
+    }
+
     try {
       await api.updateProfile({
         email: user?.email || '',
         name: formData.name,
         phone: cleanPhone,
         ktp: cleanKtp,
-        profileImage: profileImage
+        profileImage: profileImage,
+        medicalHistory: isPatient ? complaintText : undefined,
       });
 
       const updatedUser = {
@@ -224,7 +338,8 @@ const Profile = () => {
         email: formData.email,
         phone: cleanPhone,
         ktp: cleanKtp,
-        profileImage: profileImage
+        profileImage: profileImage,
+        medicalHistory: isPatient ? complaintText : user?.medicalHistory,
       };
 
       localStorage.setItem('user', JSON.stringify(updatedUser));
@@ -294,12 +409,11 @@ const Profile = () => {
 
     try {
       await api.deleteAccount(user?.email || '', deleteConfirmPassword);
-      await api.logout().catch(() => undefined);
-
       localStorage.removeItem('user');
       window.dispatchEvent(new Event('userUpdated'));
       alert('Akun berhasil dihapus. Terima kasih telah menggunakan layanan kami.');
-      navigate('/');
+      navigate('/login', { replace: true });
+      void api.logout().catch(() => undefined);
     } catch (error: any) {
       console.error('Delete account error:', error);
       alert(error.message || 'Password salah! Penghapusan akun dibatalkan.');
@@ -392,6 +506,14 @@ const Profile = () => {
                     <p className="text-sm text-slate-500">KTP: {user.ktp}</p>
                   </div>
                 )}
+                {!isStaffRole(user.role) && (
+                  <div className="flex items-start justify-center sm:justify-start gap-1.5 mt-1">
+                    <Activity className="w-3.5 h-3.5 text-slate-400 mt-0.5" />
+                    <p className="text-sm text-slate-500 line-clamp-2">
+                      Keluhan: {user.medicalHistory ? user.medicalHistory : 'Belum diisi'}
+                    </p>
+                  </div>
+                )}
 
                 {/* Image Actions */}
                 {profileImage && (
@@ -480,6 +602,23 @@ const Profile = () => {
                   <p className="mt-1 text-xs text-slate-400">Diisi jika Anda ingin melengkapi identitas pasien.</p>
                 </div>
 
+                {!isStaffRole(user.role) && (
+                  <div>
+                    <label htmlFor="medicalHistory" className="block text-xs font-medium text-slate-600 mb-1.5">Keluhan Penyakit</label>
+                    <textarea
+                      id="medicalHistory"
+                      name="medicalHistory"
+                      value={formData.medicalHistory}
+                      onChange={handleChange}
+                      className={inputClass}
+                      rows={3}
+                      placeholder="Tuliskan keluhan penyakit Anda saat ini"
+                      required
+                    />
+                    <p className="mt-1 text-xs text-slate-400">Perbarui keluhan jika Anda datang kembali dengan penyakit yang berbeda.</p>
+                  </div>
+                )}
+
                 <div className="flex gap-2.5 pt-1">
                   <button type="submit" className="bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-medium px-5 py-2.5 rounded-lg transition-colors">
                     Simpan
@@ -491,36 +630,6 @@ const Profile = () => {
               </form>
             )}
           </div>
-
-          {/* Admin Quick Links */}
-          {isStaffRole(user.role) && (
-            <div className="bg-white border border-emerald-100 rounded-xl p-5 sm:p-7 mb-5">
-              <h3 className="text-lg font-semibold text-slate-700 mb-1 flex items-center gap-2">
-                <BarChart3 className="w-4 h-4 text-emerald-500" /> Panel Admin
-              </h3>
-              <p className="text-xs text-slate-400 mb-4">Akses cepat ke fitur administrasi</p>
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                {[
-                  { to: '/admin/dashboard', icon: BarChart3, label: 'Dashboard', color: 'bg-emerald-50 text-emerald-600' },
-                  { to: '/admin/users', icon: Users, label: 'Kelola Pasien', color: 'bg-emerald-50 text-emerald-600' },
-                  { to: '/admin/broadcast', icon: Megaphone, label: 'Broadcast', color: 'bg-amber-50 text-amber-600' },
-                  { to: '/admin/announcements', icon: Bell, label: 'Pengumuman', color: 'bg-rose-50 text-rose-600' },
-                  { to: '/admin/register', icon: UserPlus, label: 'Tambah Staf', color: 'bg-violet-50 text-violet-600', adminOnly: true },
-                ].map((item) => (
-                  ((item as any).adminOnly && !isAdminRole(user.role)) ? null : (
-                    <Link
-                      key={item.to}
-                      to={item.to}
-                      className={`flex flex-col items-center gap-2 p-4 rounded-xl border border-slate-100 hover:border-slate-200 transition-colors ${item.color}`}
-                    >
-                      <item.icon className="w-5 h-5" />
-                      <span className="text-xs font-medium text-center">{item.label}</span>
-                    </Link>
-                  )
-                ))}
-              </div>
-            </div>
-          )}
 
           {/* Stats – only for patients */}
           {!isStaffRole(user.role) && (

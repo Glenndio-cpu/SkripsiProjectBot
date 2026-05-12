@@ -6,6 +6,7 @@ export interface UserData {
   name: string;
   phone: string;
   ktp?: string;
+  medicalHistory?: string;
   profileImage?: string;
   createdAt: string;
   role?: string;
@@ -108,12 +109,14 @@ export async function copyPhonestoClipboard(): Promise<boolean> {
 
 export async function getUserStats() {
   const users = await getAllUsers();
-  const usersWithPhone = users.filter(u => u.phone && u.phone.length > 0);
+  const patients = users.filter(u => (u.role || 'patient') === 'patient');
+  const patientsWithPhone = patients.filter(u => u.phone && u.phone.length > 0);
   return {
     totalUsers: users.length,
-    usersWithPhone: usersWithPhone.length,
-    registrationRate: users.length > 0
-      ? ((usersWithPhone.length / users.length) * 100).toFixed(1)
+    totalPatients: patients.length,
+    patientsWithPhone: patientsWithPhone.length,
+    registrationRate: patients.length > 0
+      ? ((patientsWithPhone.length / patients.length) * 100).toFixed(1)
       : '0'
   };
 }
@@ -140,7 +143,7 @@ export function formatPhoneDisplay(phone: string): string {
 }
 
 export function isValidIndonesianPhone(phone: string): boolean {
-  const cleaned = phone.replace(/[\s\-\(\)\+]/g, '');
+  const cleaned = phone.replace(/[\s\-()+ ]/g, '');
   if (cleaned.length < 10 || cleaned.length > 15) return false;
   if (!/^[0-9]+$/.test(cleaned)) return false;
   if (!cleaned.startsWith('08') && !cleaned.startsWith('62') && !cleaned.startsWith('8')) return false;

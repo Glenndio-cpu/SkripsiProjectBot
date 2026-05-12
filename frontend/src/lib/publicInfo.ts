@@ -7,6 +7,20 @@ const digitsOnly = (value: string): string => value.replace(/\D+/g, '');
 
 const normalizePhoneHref = (value: string): string => value.replace(/[^+\d]/g, '');
 
+export const formatPhoneDisplay = (value: string): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (trimmed.startsWith('+')) return trimmed;
+
+  const digits = trimmed.replace(/\D+/g, '');
+  if (!digits) return trimmed;
+  if (digits.startsWith('62')) return `+${digits}`;
+  if (digits.startsWith('0')) return `+62${digits.slice(1)}`;
+  if (digits.startsWith('8')) return `+62${digits}`;
+
+  return `+${digits}`;
+};
+
 const normalizeWhatsappNumber = (value: string): string => {
   const normalized = digitsOnly(value);
   if (!normalized) return '';
@@ -28,6 +42,7 @@ export const publicInfo = {
   address: clean(import.meta.env.VITE_PUSKESMAS_ADDRESS),
   openHours: clean(import.meta.env.VITE_PUSKESMAS_OPEN_HOURS),
   website: clean(import.meta.env.VITE_PUSKESMAS_WEBSITE),
+  contactResponseTime: clean(import.meta.env.VITE_CONTACT_RESPONSE_TIME) || '1x24 jam kerja',
 };
 
 const whatsappNumber = normalizeWhatsappNumber(publicInfo.whatsapp || publicInfo.phone);
@@ -42,7 +57,8 @@ export const publicLinks = {
 
 export function buildSupportContactText(): string {
   const lines: string[] = [];
-  if (publicInfo.phone) lines.push(`Telepon/WhatsApp: ${publicInfo.phone}`);
+  const displayPhone = formatPhoneDisplay(publicInfo.phone || publicInfo.whatsapp || '');
+  if (displayPhone) lines.push(`Telepon/WhatsApp: ${displayPhone}`);
   if (publicInfo.email) lines.push(`Email: ${publicInfo.email}`);
   if (publicInfo.address) lines.push(`Alamat: ${publicInfo.address}`);
 

@@ -1,0 +1,23 @@
+			Skenario Alur atau tahapan Pendaftaran Pasien
+
+Langkah 1: Pasien datang ke gedung Puskesmas.
+
+Langkah 2: Pasien mengambil Kartu Antrean yang telah disediakan petugas.
+
+Langkah 3: Pasien menyerahkan kartu antrean dan identitas (KTP/KK/BPJS/SIM/Kartu Kunjungan) ke bagian loket.
+
+Langkah 4: Petugas melakukan verifikasi kartu kunjungan dan pencatatan identitas.
+
+Langkah 5 (Pengecekan Status):
+
+Jika Pasien Baru: Petugas melakukan pencatatan data ke Buku Register.
+
+Jika Pasien Lama: Petugas melakukan pencarian berkas Rekam Medik di ruang arsip.
+
+Langkah 6: Petugas loket menyerahkan status rekam medik pasien ke Ruang Pemeriksaan Umum (R. PU).
+
+Langkah 7: Petugas loket memastikan kembali kelengkapan pengisian data rekam medik.
+
+Langkah 8: Petugas loket menginput data pendaftaran ke dalam sistem aplikasi SIKDA Generik.
+
+Langkah 9: Proses pendaftaran selesai, pasien menunggu panggilan di ruang tunggu.

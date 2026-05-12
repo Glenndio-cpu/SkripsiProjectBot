@@ -3,7 +3,9 @@ import { Link, useNavigate, useLocation } from 'react-router-dom';
 import { FaClinicMedical, FaUser, FaSignOutAlt } from "react-icons/fa";
 import { Megaphone, ChevronDown, LogIn, UserPlus, Menu, X } from 'lucide-react';
 import api from '../../lib/api';
-import { isAdminRole, isHeadRole, isStaffRole, roleLabel } from '../../lib/roles';
+import { isHeadRole, isStaffRole, roleLabel } from '../../lib/roles';
+import { getMainNavLinks } from '../../lib/navigation';
+import { getUserInitial, useRealtimeUser } from '../../hooks/use-realtime-user';
 
 interface HeaderProps {
   onMenuToggle?: () => void;
@@ -13,37 +15,12 @@ interface HeaderProps {
 const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
   const navigate = useNavigate();
   const location = useLocation();
-  const [user, setUser] = useState<{ name: string; email: string; phone?: string; profileImage?: string; role?: string } | null>(null);
+  const user = useRealtimeUser();
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [scrolled, setScrolled] = useState(false);
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    const updateUser = () => {
-      const userData = localStorage.getItem('user');
-      if (userData) {
-        try {
-          const parsed = JSON.parse(userData);
-          if (parsed?.role === 'public') {
-            localStorage.removeItem('user');
-            setUser(null);
-            return;
-          }
-          setUser(parsed);
-        } catch {
-          localStorage.removeItem('user');
-          setUser(null);
-        }
-      } else {
-        setUser(null);
-      }
-    };
-
-    updateUser();
-
-    window.addEventListener('storage', updateUser);
-    window.addEventListener('userUpdated', updateUser);
-
     const handleClickOutside = (event: MouseEvent) => {
       if (dropdownRef.current && !dropdownRef.current.contains(event.target as Node)) {
         setIsDropdownOpen(false);
@@ -54,8 +31,6 @@ const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
 
     return () => {
       document.removeEventListener('mousedown', handleClickOutside);
-      window.removeEventListener('storage', updateUser);
-      window.removeEventListener('userUpdated', updateUser);
     };
   }, []);
 
@@ -67,51 +42,15 @@ const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
   }, []);
 
   const handleLogout = async () => {
-    await api.logout().catch(() => undefined);
     localStorage.removeItem('user');
-    setUser(null);
     setIsDropdownOpen(false);
     window.dispatchEvent(new Event('userUpdated'));
-    navigate('/');
+    navigate('/login', { replace: true });
+    void api.logout().catch(() => undefined);
   };
 
   // Nav links for desktop – adjust based on role
-  const isStaff = isStaffRole(user?.role);
-  const isHead = isHeadRole(user?.role);
-  const isAdmin = isAdminRole(user?.role);
-  const navLinks = isStaff
-    ? (isHead
-      ? [
-        { to: '/', label: 'Beranda' },
-        { to: '/admin/dashboard', label: 'Dashboard' },
-        { to: '/admin/patients', label: 'Data Pasien' },
-        { to: '/admin/schedules', label: 'Jadwal Berobat/Posyandu' },
-        { to: '/admin/announcements', label: 'Validasi Informasi' },
-        { to: '/admin/broadcast', label: 'Broadcast WA Resmi' },
-      ]
-      : isAdmin
-        ? [
-          { to: '/', label: 'Beranda' },
-          { to: '/admin/dashboard', label: 'Dashboard' },
-          { to: '/admin/users', label: 'Manajemen User' },
-          { to: '/admin/register', label: 'Tambah Staf' },
-          { to: '/admin/ai', label: 'Kelola dan Konfigurasi AI' },
-          { to: '/admin/broadcast', label: 'WA Gateway' },
-        ]
-        : [
-          { to: '/', label: 'Beranda' },
-          { to: '/admin/dashboard', label: 'Dashboard' },
-          { to: '/admin/schedules', label: 'Jadwal Berobat/Posyandu' },
-          { to: '/admin/announcements', label: 'Informasi Kesehatan' },
-        ])
-    : [
-      { to: '/', label: 'Beranda' },
-      { to: '/tentang', label: 'Tentang' },
-      { to: '/informasi', label: 'Informasi' },
-      { to: '/konsultasi', label: 'Konsultasi' },
-      { to: '/jadwal-berobat', label: 'Jadwal Berobat' },
-      { to: '/kontak', label: 'Kontak' },
-    ];
+  const navLinks = getMainNavLinks(user?.role);
 
   const isActive = (path: string) => location.pathname === path;
 
@@ -182,7 +121,7 @@ const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
                     />
                   ) : (
                     <div className="w-8 h-8 bg-gradient-to-br from-emerald-500 to-teal-600 rounded-full flex items-center justify-center text-white text-sm font-semibold">
-                      {user.name.charAt(0).toUpperCase()}
+                      {getUserInitial(user.name, 'U')}
                     </div>
                   )}
                   <span className="text-sm font-medium text-gray-700 max-w-[120px] truncate">{user.name}</span>
@@ -204,7 +143,7 @@ const Header = ({ onMenuToggle, sidebarOpen = false }: HeaderProps) => {
                       </span>
                     </div>
 
-                    {(isAdminRole(user?.role) || isHeadRole(user?.role)) && (
+                    {isHeadRole(user?.role) && (
                       <>
                         <Link
                           to="/admin/broadcast"

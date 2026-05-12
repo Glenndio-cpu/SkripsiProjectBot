@@ -2,21 +2,17 @@ import React from 'react';
 import { Link } from 'react-router-dom';
 import { FaClinicMedical } from 'react-icons/fa';
 import { Mail, Phone, MapPin, ArrowUp, Heart } from 'lucide-react';
-import { publicInfo, publicLinks } from '../../lib/publicInfo';
+import { formatPhoneDisplay, publicInfo, publicLinks } from '../../lib/publicInfo';
+import { getMainNavLinks } from '../../lib/navigation';
+import { useRealtimeUser } from '../../hooks/use-realtime-user';
 
 interface FooterProps {
   scrollToTop: () => void;
 }
 
 const Footer: React.FC<FooterProps> = ({ scrollToTop }) => {
-  const navLinks = [
-    { to: '/', label: 'Beranda' },
-    { to: '/tentang', label: 'Tentang' },
-    { to: '/penyakit', label: 'Penyakit' },
-    { to: '/pencegahan', label: 'Pencegahan' },
-    { to: '/konsultasi', label: 'Konsultasi' },
-    { to: '/kontak', label: 'Kontak' },
-  ];
+  const user = useRealtimeUser();
+  const navLinks = getMainNavLinks(user?.role);
 
   const contactInfo = [
     {
@@ -26,8 +22,8 @@ const Footer: React.FC<FooterProps> = ({ scrollToTop }) => {
     },
     {
       icon: Phone,
-      text: publicInfo.phone || 'Telepon belum dikonfigurasi',
-      href: publicLinks.phone || undefined,
+      text: formatPhoneDisplay(publicInfo.phone || publicInfo.whatsapp || '') || 'Telepon belum dikonfigurasi',
+      href: publicLinks.phone || publicLinks.whatsapp || undefined,
     },
     {
       icon: MapPin,

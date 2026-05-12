@@ -1,0 +1,32 @@
+KELOMPOKAN TIPE RUMAH SAKIT RUJUKAN
+🟥 TIPE A (Rujukan Tertinggi / Nasional)
+
+👉 Fasilitas paling lengkap, subspesialis lengkap
+
+RSUP Prof. R.D. Kandou Manado
+🟧 TIPE B (Rujukan Provinsi)
+
+👉 Spesialis lengkap, sebagian subspesialis
+
+RSUD ODSK Provinsi Sulawesi Utara
+RS TK. II Robert Wolter Monginsidi
+RS Advent Manado
+RS Siloam Manado
+🟨 TIPE C (Rujukan Kabupaten/Kota)
+
+👉 Spesialis dasar (penyakit dalam, anak, bedah, obgyn)
+
+RSU Pancaran Kasih
+RSAU Dr. Charles P.J. Suoth Sam Ratulangi
+RS Manado Medical Center
+RS Sentra Medika
+RSUD Maria Walanda Maramis
+RSU Hermana Lembean
+RSU Tonsea GMIM
+🟩 TIPE KHUSUS (Tidak masuk A/B/C umum)
+
+👉 Rumah sakit/klinik dengan layanan spesifik
+
+RS Mata Sulawesi Utara → RS Khusus Mata
+Klinik Utama Mata Prov. Sulut → Klinik spesialis
+RSJ Prof. Dr. V.K. Ratumbuysang → RS Jiwa

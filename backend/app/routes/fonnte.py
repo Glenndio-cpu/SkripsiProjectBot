@@ -14,6 +14,13 @@ fonnte_bp = Blueprint('fonnte', __name__)
 
 FONNTE_API_URL = 'https://api.fonnte.com'
 
+# Cache for Fonnte status — short TTL for near-realtime updates
+_fonnte_status_cache = {
+    'data': None,
+    'timestamp': 0,
+}
+_FONNTE_CACHE_TTL = 15  # 15 seconds — balances realtime vs rate-limit
+
 
 def _get_token():
     return os.getenv('FONNTE_TOKEN', '')
@@ -22,12 +29,47 @@ def _get_token():
 def _fonnte_headers():
     return {'Authorization': _get_token()}
 
+
+def _normalize_text(value):
+    if value is None:
+        return ''
+    return str(value).strip().lower()
+
+
+def _is_explicit_rate_limit(data):
+    response_text = ' '.join(_normalize_text(data.get(key)) for key in ('reason', 'detail', 'message'))
+    status_code = _normalize_text(data.get('status_code'))
+    return 'rate limit' in response_text or 'rate_limit' in response_text or status_code == '429'
+
+
+def _extract_connection_state(data):
+    candidates = [
+        data.get('device_status'),
+        data.get('status'),
+        (data.get('device') or {}).get('status') if isinstance(data.get('device'), dict) else None,
+        (data.get('device') or {}).get('device_status') if isinstance(data.get('device'), dict) else None,
+        (data.get('device') or {}).get('connected') if isinstance(data.get('device'), dict) else None,
+        (data.get('device') or {}).get('online') if isinstance(data.get('device'), dict) else None,
+    ]
+
+    for candidate in candidates:
+        normalized = _normalize_text(candidate)
+        if normalized in ('connect', 'connected', 'online', 'active', 'true', '1', 'yes'):
+            return True, normalized
+        if normalized in ('disconnect', 'disconnected', 'offline', 'inactive', 'false', '0', 'no'):
+            return False, normalized
+
+    return None, _normalize_text(data.get('device_status') or data.get('status') or 'unknown')
+
 # ===========================================================
 #  GET /api/fonnte/status  -- Check Fonnte device status
+#  ?force=true  — bypass cache (used by manual Refresh button)
 # ===========================================================
 @fonnte_bp.route('/status', methods=['GET'])
 @require_roles(ROLE_ADMIN, ROLE_HEAD)
 def fonnte_status():
+    import time
+
     token = _get_token()
     if not token:
         return jsonify({
@@ -36,34 +78,75 @@ def fonnte_status():
             'message': 'FONNTE_TOKEN belum dikonfigurasi di .env'
         })
 
+    now = time.time()
+    force = request.args.get('force', '').lower() in ('true', '1', 'yes')
+
+    # Return cached status if still fresh AND not a forced refresh
+    if not force and _fonnte_status_cache['data'] and (now - _fonnte_status_cache['timestamp']) < _FONNTE_CACHE_TTL:
+        cached = _fonnte_status_cache['data'].copy()
+        cached['cached'] = True
+        return jsonify(cached)
+
     try:
-        # Fonnte device info endpoint
         resp = requests.post(
             f'{FONNTE_API_URL}/device',
             headers=_fonnte_headers(),
             data={},
-            timeout=10
+            timeout=20
         )
         data = resp.json()
-        # device_status can be 'connect' or 'disconnect'
-        is_connected = data.get('device_status') == 'connect'
-        return jsonify({
-            'connected': is_connected,
+
+        # Handle only explicit rate-limit responses from Fonnte.
+        if _is_explicit_rate_limit(data):
+            print('[WARN] Fonnte rate limited')
+            if _fonnte_status_cache['data']:
+                cached = _fonnte_status_cache['data'].copy()
+                cached['cached'] = True
+                cached['rateLimited'] = True
+                return jsonify(cached)
+            return jsonify({
+                'connected': False,
+                'configured': True,
+                'rateLimited': True,
+                'message': 'Fonnte API rate limit — coba lagi dalam beberapa detik'
+            })
+
+        # Normal response — accept several possible shapes from Fonnte.
+        is_connected, raw_status = _extract_connection_state(data)
+        print(f'[INFO] Fonnte status: device_status={data.get("device_status")}, status={data.get("status")}, parsed={raw_status}')
+
+        if is_connected is None and _fonnte_status_cache['data']:
+            cached = _fonnte_status_cache['data'].copy()
+            cached['cached'] = True
+            cached['stale'] = True
+            cached['raw'] = data
+            cached['deviceStatus'] = raw_status
+            return jsonify(cached)
+
+        result = {
+            'connected': bool(is_connected),
             'configured': True,
             'device': data.get('device', {}),
-            'deviceStatus': data.get('device_status', 'unknown'),
-            'detail': data.get('detail', ''),
+            'deviceStatus': raw_status,
+            'detail': data.get('detail', data.get('message', data.get('reason', ''))),
             'quota': data.get('quota', None),
             'package': data.get('package', ''),
             'expired': data.get('expired', ''),
             'name': data.get('name', ''),
             'raw': data
-        })
+        }
+
+        # Cache the fresh result
+        _fonnte_status_cache['data'] = result
+        _fonnte_status_cache['timestamp'] = now
+
+        return jsonify(result)
     except Exception as e:
+        print(f'[ERROR] Fonnte status check failed: {str(e)}')
         return jsonify({
             'connected': False,
             'configured': True,
-            'message': f'Gagal menghubungi Fonnte: {str(e)}'
+            'message': f'Tidak dapat mengecek status device: {str(e)}'
         })
 
 
@@ -298,28 +381,36 @@ def fonnte_logs():
 #  POST /api/fonnte/send-individual  -- Send to one person
 # ===========================================================
 @fonnte_bp.route('/send-individual', methods=['POST'])
-@require_roles(ROLE_ADMIN)
+@require_roles(ROLE_HEAD)
 def fonnte_send_individual():
     """Send to a single contact by phone number."""
     body = request.get_json(force=True)
     token = _get_token()
     if not token:
-        return jsonify({'error': 'FONNTE_TOKEN belum dikonfigurasi'}), 400
+        return jsonify({'success': False, 'detail': 'FONNTE_TOKEN belum dikonfigurasi'}), 400
 
     phone = body.get('phone', '').strip()
     message = body.get('message', '').strip()
     name = body.get('name', '')
 
-    if not phone or not message:
-        return jsonify({'error': 'phone dan message wajib diisi'}), 400
+    print(f'[INFO] Personal send request: phone={phone}, name={name}, msg_len={len(message)}')
 
-    # Normalize
+    if not phone or not message:
+        return jsonify({'success': False, 'detail': 'Nomor telepon dan pesan harus diisi'}), 400
+
+    # Normalize phone number
     if phone.startswith('+'):
         phone = phone[1:]
     if phone.startswith('08'):
         phone = '62' + phone[1:]
+    elif phone.startswith('62'):
+        pass  # Already normalized
     elif phone.startswith('8'):
         phone = '62' + phone
+    else:
+        return jsonify({'success': False, 'detail': 'Format nomor telepon tidak valid (harus dimulai 08, 62, atau +62)'}), 400
+
+    print(f'[INFO] Normalized phone: {phone}')
 
     # Replace {name} in message
     actual_message = message.replace('{name}', name) if name else message
@@ -333,6 +424,12 @@ def fonnte_send_individual():
     }
 
     try:
+        # Get authenticated user email for logging
+        user = get_authenticated_user()
+        admin_email = user.get('email', 'unknown') if user else 'unknown'
+        
+        print(f'[INFO] Sending to Fonnte API: target={phone}, admin={admin_email}')
+        
         resp = requests.post(
             f'{FONNTE_API_URL}/send',
             headers=_fonnte_headers(),
@@ -340,10 +437,31 @@ def fonnte_send_individual():
             timeout=15
         )
         data = resp.json()
+        
+        success = data.get('status', False)
+        detail = data.get('detail', data.get('reason', 'Pesan terkirim'))
+        
+        print(f'[INFO] Fonnte response: success={success}, detail={detail}, full_response={data}')
+        
+        # Log the send attempt for audit trail
+        try:
+            execute(
+                '''INSERT INTO broadcast_logs (admin_email, message, recipients, recipient_count, 
+                   success_count, fail_count, status, created_at)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())''',
+                (admin_email, actual_message, phone, 1, 1 if success else 0, 0 if success else 1, 
+                 'sent' if success else 'failed')
+            )
+        except Exception as log_err:
+            print(f'[WARN] Failed to log personal send: {str(log_err)}')
+        
         return jsonify({
-            'success': data.get('status', False),
-            'detail': data.get('detail', data.get('reason', '')),
-            'raw': data,
+            'success': success,
+            'detail': detail if detail else ('Pesan berhasil dikirim' if success else 'Gagal mengirim pesan'),
         })
     except Exception as e:
-        return jsonify({'error': f'Gagal mengirim: {str(e)}'}), 500
+        print(f'[ERROR] fonnte_send_individual: {str(e)}')
+        return jsonify({
+            'success': False, 
+            'detail': f'Terjadi kesalahan saat mengirim: {str(e)}'
+        }), 500

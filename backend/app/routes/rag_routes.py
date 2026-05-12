@@ -233,15 +233,42 @@ def reindex():
 def query_rag():
     body = request.get_json(silent=True) or {}
     q = body.get('query', '').strip()
-    top_k = body.get('topK', 5)
+    top_k = body.get('topK', 10)
 
     if not q:
         return jsonify(error='Query tidak boleh kosong'), 400
 
     try:
-        from app.rag import retrieve
-        results = retrieve(q, top_k=top_k)
-        return jsonify(query=q, results=results, count=len(results))
+        from app.rag import retrieve, build_rag_context, _is_comprehensive_query
+
+        # Raw similarity results (what cosine similarity returns)
+        raw_results = retrieve(q, top_k=top_k)
+
+        # Full RAG context (what the chatbot actually sends to Gemini)
+        full_context = build_rag_context(q, top_k=min(top_k, 5))
+        is_comprehensive = _is_comprehensive_query(q)
+
+        # Extract unique sources from the full context for easy reference
+        context_sources = []
+        seen_sources = set()
+        for r in raw_results:
+            src = r.get('source', '')
+            if src and src not in seen_sources:
+                seen_sources.add(src)
+                context_sources.append({
+                    'source': src,
+                    'bestScore': r.get('score', 0),
+                })
+
+        return jsonify(
+            query=q,
+            isComprehensive=is_comprehensive,
+            results=raw_results,
+            count=len(raw_results),
+            contextSources=context_sources,
+            fullContextLength=len(full_context),
+            fullContext=full_context,
+        )
     except Exception as e:
         return jsonify(error=f'Gagal melakukan retrieval: {e}'), 500
 
@@ -523,7 +550,7 @@ def _get_rag_pipeline_info() -> dict:
         'chunkSize': CHUNK_SIZE,
         'chunkOverlap': CHUNK_OVERLAP,
         'topK': TOP_K,
-        'minScore': 0.25,
+        'minScore': 0.35,
         'totalDocuments': len(doc_files),
         'totalDocumentsSize': total_documents_size,
         'documents': doc_files,

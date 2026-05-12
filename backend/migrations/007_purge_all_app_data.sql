@@ -9,6 +9,7 @@ TRUNCATE TABLE active_days;
 TRUNCATE TABLE activities;
 TRUNCATE TABLE announcements;
 TRUNCATE TABLE broadcast_logs;
+TRUNCATE TABLE patient_complaints;
 TRUNCATE TABLE users;
 
 SET FOREIGN_KEY_CHECKS = 1;

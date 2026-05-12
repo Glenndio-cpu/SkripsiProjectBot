@@ -1,0 +1,31 @@
+jadwal perawat:
+  JADWAL_PERAWAT_PUSKESMAS_WORI_MEI_2026.txt (0.9471)
+  JADWAL_PERAWAT_PUSKESMAS_WORI_MEI_2026.txt (0.8719)
+  JADWAL_PERAWAT_PUSKESMAS_WORI_MEI_2026.txt (0.8361)
+
+rumah sakit rujukan:
+  KELOMPOKAN_TIPE_RUMAH_SAKIT_RUJUKAN.txt (1.139)
+  Daftar_Rumah_Sakit_Rujukan.txt (1.1075)
+  Identitas_Visi_dan_Misi_Puskesmas.txt (0.4593)
+
+alur pendaftaran:
+  Skenario_Alur_Pendaftaran_Pasien.txt (1.0679)
+  Janji_Layanan_Jaminan_Kesehatan_Nasional_JKN.txt (0.5171)
+  Data_RAG_DEVELOPER.txt (0.4917)
+
+promosi kesehatan:
+  Program_Promosi_Kesehatan__Edukasi_Puskesmas_Wor (1.0781)
+  Daftar_Layanan_Kesehatan.txt (0.64)
+  Janji_Layanan_Jaminan_Kesehatan_Nasional_JKN.txt (0.6029)
+
+jadwal dokter:
+  JADWAL_DOKTER_APRIL_2026.txt (1.0769)
+  Jadwal_Operasional_Pelayanan.txt (0.7591)
+  STURKTUR_PETUGAS_TENAGA_MEDIS_PUSKESMAS_WORI.txt (0.5702)
+
+daftar layanan:
+  Daftar_Layanan_Kesehatan.txt (1.184)
+  Janji_Layanan_Jaminan_Kesehatan_Nasional_JKN.txt (0.8154)
+  Jadwal_Operasional_Pelayanan.txt (0.7202)
+
+DONE

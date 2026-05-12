@@ -210,7 +210,7 @@ export function ChatArea() {
         </div>
         <div className="flex-1">
           <h2 className="text-gray-900" style={{ fontWeight: 600, fontSize: "0.9375rem" }}>
-            Asisten Virtual Puskesmas
+            Chatbot Puskesmas Wori
           </h2>
           <p className="text-xs text-emerald-600" style={{ fontWeight: 500 }}>
             ● Online • Siap membantu 24/7

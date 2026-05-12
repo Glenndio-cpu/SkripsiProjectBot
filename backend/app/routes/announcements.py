@@ -1,14 +1,16 @@
 """Announcement and schedule management routes -- /api/announcements/*"""
 
-from datetime import datetime
+import hashlib
+import json
+import time
+from datetime import datetime, timedelta
 
-from flask import Blueprint, jsonify, request
+from flask import Blueprint, Response, jsonify, request, stream_with_context
 
 from app.db import execute, query
 from app.role_guard import require_roles
 from app.roles import ROLE_HEAD, ROLE_NURSE, ROLE_PATIENT
 from app.session_auth import get_authenticated_user
-from datetime import datetime, timedelta
 
 announcements_bp = Blueprint('announcements', __name__)
 
@@ -26,11 +28,17 @@ SCHEDULE_KEYWORDS = (
 
 
 def _to_iso(value):
+    if isinstance(value, timedelta):
+        total_seconds = int(value.total_seconds())
+        sign = '-' if total_seconds < 0 else ''
+        total_seconds = abs(total_seconds)
+        hours, remainder = divmod(total_seconds, 3600)
+        minutes, seconds = divmod(remainder, 60)
+        if seconds:
+            return f'{sign}{hours:02d}:{minutes:02d}:{seconds:02d}'
+        return f'{sign}{hours:02d}:{minutes:02d}'
     if hasattr(value, 'isoformat'):
         return value.isoformat()
-    return value
-    if isinstance(value, timedelta):
-        return str(value)
     return value
 
 def _normalize_category(raw_value):
@@ -143,12 +151,7 @@ def _get_existing_category(ann_id):
     return 'schedule' if _is_schedule_text(row.get('title'), row.get('content')) else 'health_info'
 
 
-# -- GET /api/announcements/public (no auth) -------------------------------
-
-@announcements_bp.route('/public', methods=['GET'])
-def get_public_announcements():
-    requested_category = _normalize_category(request.args.get('category')) or 'health_info'
-
+def _query_public_announcements(requested_category):
     try:
         if requested_category == 'schedule':
             rows = query(
@@ -187,8 +190,80 @@ def get_public_announcements():
         else:
             rows = [r for r in rows if not _is_schedule_text(r.get('title'), r.get('content'))]
 
-    rows = [_serialize_announcement_row(r) for r in rows]
+    return [_serialize_announcement_row(r) for r in rows]
+
+
+def _public_announcements_signature(requested_category):
+    rows = _query_public_announcements(requested_category)
+    payload = json.dumps(rows, sort_keys=True, ensure_ascii=False, separators=(',', ':'))
+    digest = hashlib.sha256(payload.encode('utf-8')).hexdigest()
+    return rows, digest
+
+
+# -- GET /api/announcements/public (no auth) -------------------------------
+
+@announcements_bp.route('/public', methods=['GET'])
+def get_public_announcements():
+    requested_category = _normalize_category(request.args.get('category')) or 'health_info'
+
+    rows = _query_public_announcements(requested_category)
     return jsonify(announcements=rows)
+
+
+# -- GET /api/announcements/public/stream (no auth, SSE) ------------------
+
+@announcements_bp.route('/public/stream', methods=['GET'])
+def stream_public_announcements():
+    requested_category = _normalize_category(request.args.get('category')) or 'health_info'
+
+    try:
+        interval_seconds = int(request.args.get('interval', 4))
+    except Exception:
+        interval_seconds = 4
+    interval_seconds = max(2, min(interval_seconds, 15))
+
+    def generate_events():
+        last_signature = None
+        yield 'retry: 4000\n\n'
+
+        while True:
+            try:
+                rows, signature = _public_announcements_signature(requested_category)
+
+                if signature != last_signature:
+                    payload = json.dumps(
+                        {
+                            'category': requested_category,
+                            'count': len(rows),
+                            'signature': signature,
+                            'updatedAt': datetime.utcnow().isoformat() + 'Z',
+                        },
+                        ensure_ascii=False,
+                    )
+                    yield f'event: announcements-updated\ndata: {payload}\n\n'
+                    last_signature = signature
+                else:
+                    yield f': keepalive {datetime.utcnow().isoformat()}Z\n\n'
+
+                time.sleep(interval_seconds)
+            except GeneratorExit:
+                break
+            except Exception as exc:
+                print(f'Announcement stream warning: {exc}')
+                yield 'event: stream-error\ndata: {"error":"stream_failed"}\n\n'
+                time.sleep(interval_seconds)
+
+    headers = {
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+    }
+
+    return Response(
+        stream_with_context(generate_events()),
+        headers=headers,
+        mimetype='text/event-stream',
+    )
 
 
 # -- GET /api/announcements (staff) ---------------------------------------
@@ -239,6 +314,7 @@ def list_announcements():
 def create_announcement():
     body = request.get_json(silent=True) or {}
     actor = get_authenticated_user() or {}
+    actor_role = actor.get('role', '')
 
     category = _normalize_category(body.get('category')) or 'health_info'
     title = (body.get('title') or '').strip()
@@ -266,9 +342,10 @@ def create_announcement():
         if not content:
             content = f'{title} pada {event_date} pukul {event_time[:5]} di {location}'
         ann_type = 'info'
-        approval_status = 'approved'
-        approved_by = actor.get('email')
-        approved_at = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
+        # Semua jadwal harus melalui approval Kepala Puskesmas sebelum dipublikasikan.
+        approval_status = 'pending'
+        approved_by = None
+        approved_at = None
     else:
         if not title or not content:
             return jsonify(error='Judul dan isi informasi kesehatan wajib diisi'), 400
@@ -277,9 +354,15 @@ def create_announcement():
         location = None
         event_date = None
         event_time = None
-        approval_status = 'pending'
-        approved_by = None
-        approved_at = None
+        # Informasi kesehatan dari nurse memerlukan approval, dari head langsung approved
+        if actor_role == ROLE_NURSE:
+            approval_status = 'pending'
+            approved_by = None
+            approved_at = None
+        else:
+            approval_status = 'approved'
+            approved_by = actor.get('email')
+            approved_at = datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')
 
     execute(
         'INSERT INTO announcements '
@@ -396,10 +479,10 @@ def update_announcement(ann_id):
             fields.append('approved_by = NULL')
             fields.append('approved_at = NULL')
         else:
-            # Schedule updates are operational and should remain immediately available.
-            fields.append('approval_status = %s'); values.append('approved')
-            fields.append('approved_by = %s'); values.append(actor.get('email'))
-            fields.append('approved_at = NOW()')
+            # Schedule changes must always go back to pending approval.
+            fields.append('approval_status = %s'); values.append('pending')
+            fields.append('approved_by = NULL')
+            fields.append('approved_at = NULL')
 
     if not fields:
         return jsonify(error='Tidak ada data yang diubah'), 400

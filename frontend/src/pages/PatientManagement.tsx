@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import Layout from '../components/layout/Layout';
 import { getAllUsers, type UserData } from '../lib/userBroadcast';
@@ -20,12 +20,27 @@ interface ChatHistoryMessage {
   createdAt?: string;
 }
 
+interface PatientComplaint {
+  id: number;
+  complaint: string;
+  complaintDate: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
 function maskKtp(ktp?: string): string {
   if (!ktp) return '-';
   const clean = ktp.replace(/\D/g, '');
   if (!clean) return '-';
   if (clean.length <= 4) return clean;
   return `${'*'.repeat(clean.length - 4)}${clean.slice(-4)}`;
+}
+
+function truncateText(value?: string, max = 60): string {
+  const text = (value || '').trim();
+  if (!text) return '-';
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 3)}...`;
 }
 
 const PatientManagement = () => {
@@ -43,31 +58,16 @@ const PatientManagement = () => {
   const [loadingChatHistory, setLoadingChatHistory] = useState(false);
   const [isEditingPatient, setIsEditingPatient] = useState(false);
   const [editForm, setEditForm] = useState({ name: '', phone: '', ktp: '' });
+  const [patientComplaints, setPatientComplaints] = useState<PatientComplaint[]>([]);
+  const [complaintsLoading, setComplaintsLoading] = useState(false);
+  const [complaintSaving, setComplaintSaving] = useState(false);
+  const [complaintForm, setComplaintForm] = useState({
+    complaint: '',
+    complaintDate: new Date().toISOString().slice(0, 10),
+  });
 
-  useEffect(() => {
-    // Check if user is staff
-    const userData = localStorage.getItem('user');
-    if (!userData) {
-      navigate('/login');
-      return;
-    }
 
-    const user = JSON.parse(userData);
-    if (!isStaffRole(user.role)) {
-      navigate('/');
-      return;
-    }
-
-    setCurrentRole(user.role || '');
-
-    loadPatients();
-  }, [navigate]);
-
-  useEffect(() => {
-    applyFilters();
-  }, [searchTerm, filterType, patients, allActivities]);
-
-  const loadPatients = async () => {
+  const loadPatients = useCallback(async (selectedEmail?: string) => {
     const [usersData, activitiesData] = await Promise.all([
       getAllUsers(),
       getAllUserStats()
@@ -76,7 +76,14 @@ const PatientManagement = () => {
     setPatients(patientList as any);
     setFilteredPatients(patientList as any);
     setAllActivities(activitiesData as any);
-  };
+
+    if (selectedEmail) {
+      const updated = patientList.find((p: any) => p.email === selectedEmail);
+      if (updated) {
+        setSelectedPatient((prev) => (prev ? { ...prev, ...updated } : prev));
+      }
+    }
+  }, []);
 
   const applyFilters = () => {
     let filtered = [...patients];
@@ -119,6 +126,29 @@ const PatientManagement = () => {
     setFilteredPatients(filtered);
   };
 
+  useEffect(() => {
+    // Check if user is staff
+    const userData = localStorage.getItem('user');
+    if (!userData) {
+      navigate('/login');
+      return;
+    }
+
+    const user = JSON.parse(userData);
+    if (!isStaffRole(user.role)) {
+      navigate('/');
+      return;
+    }
+
+    setCurrentRole(user.role || '');
+
+    loadPatients();
+  }, [loadPatients, navigate]);
+
+  useEffect(() => {
+    applyFilters();
+  }, [searchTerm, filterType, patients, allActivities]);
+
   const handleViewDetails = (patient: UserData) => {
     setSelectedPatient(patient);
     setEditForm({
@@ -128,6 +158,7 @@ const PatientManagement = () => {
     });
     setIsEditingPatient(false);
     loadPatientChatHistory(patient.email);
+    loadPatientComplaints(patient.email, true, patient.medicalHistory || '');
 
     const activity = allActivities.find((a: any) => a.email === patient.email);
     setPatientActivity(activity || {
@@ -153,6 +184,59 @@ const PatientManagement = () => {
     }
   };
 
+  const loadPatientComplaints = useCallback(async (
+    email: string,
+    syncForm = true,
+    fallbackComplaint = ''
+  ) => {
+    setComplaintsLoading(true);
+    try {
+      const res = await api.getPatientComplaints(email, 10);
+      const list = (res.complaints || []) as PatientComplaint[];
+      setPatientComplaints(list);
+
+      if (syncForm) {
+        const latest = list[0];
+        setComplaintForm({
+          complaint: latest?.complaint || fallbackComplaint,
+          complaintDate: latest?.complaintDate || new Date().toISOString().slice(0, 10),
+        });
+      }
+    } catch {
+      setPatientComplaints([]);
+      if (syncForm) {
+        setComplaintForm({
+          complaint: fallbackComplaint,
+          complaintDate: new Date().toISOString().slice(0, 10),
+        });
+      }
+    } finally {
+      setComplaintsLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!isStaffRole(currentRole)) return;
+    if (typeof EventSource === 'undefined') return;
+
+    const streamUrl = api.getPatientComplaintsStreamUrl({ interval: 4 });
+    const source = new EventSource(streamUrl, { withCredentials: true });
+
+    const handleRefresh = () => {
+      const selectedEmail = selectedPatient?.email;
+      void loadPatients(selectedEmail);
+      if (selectedEmail) {
+        void loadPatientComplaints(selectedEmail, false);
+      }
+    };
+
+    source.addEventListener('patient-complaints-updated', handleRefresh);
+
+    return () => {
+      source.close();
+    };
+  }, [currentRole, loadPatients, loadPatientComplaints, selectedPatient?.email]);
+
   const handleSavePatientUpdate = async () => {
     if (!selectedPatient) return;
     try {
@@ -164,7 +248,7 @@ const PatientManagement = () => {
       });
       alert('Data pasien berhasil diperbarui');
       setIsEditingPatient(false);
-      await loadPatients();
+      await loadPatients(selectedPatient.email);
       setSelectedPatient((prev) => prev ? {
         ...prev,
         name: editForm.name.trim(),
@@ -173,6 +257,35 @@ const PatientManagement = () => {
       } : prev);
     } catch (error: any) {
       alert(error?.message || 'Gagal memperbarui data pasien');
+    }
+  };
+
+  const handleSaveComplaint = async () => {
+    if (!selectedPatient) return;
+    const trimmedComplaint = complaintForm.complaint.trim();
+    if (!trimmedComplaint) {
+      alert('Keluhan pasien wajib diisi');
+      return;
+    }
+
+    setComplaintSaving(true);
+    try {
+      await api.updatePatientComplaint({
+        email: selectedPatient.email,
+        complaint: trimmedComplaint,
+        complaintDate: complaintForm.complaintDate || undefined,
+      });
+      await loadPatients(selectedPatient.email);
+      await loadPatientComplaints(selectedPatient.email, true, trimmedComplaint);
+      setSelectedPatient((prev) => prev ? {
+        ...prev,
+        medicalHistory: trimmedComplaint,
+      } : prev);
+      alert('Keluhan pasien berhasil diperbarui');
+    } catch (error: any) {
+      alert(error?.message || 'Gagal memperbarui keluhan pasien');
+    } finally {
+      setComplaintSaving(false);
     }
   };
 
@@ -195,11 +308,12 @@ const PatientManagement = () => {
   };
 
   const exportToCSV = () => {
-    let csv = 'Nama,Email,Nomor HP,Nomor KTP,Tanggal Daftar,Konsultasi,Hari Aktif\n';
+    let csv = 'Nama,Email,Nomor HP,Nomor KTP,Tanggal Daftar,Keluhan Terakhir,Konsultasi,Hari Aktif\n';
 
     filteredPatients.forEach(patient => {
       const activity = allActivities.find((a: any) => a.email === patient.email);
-      csv += `"${patient.name}","${patient.email}","${patient.phone || '-'}","${patient.ktp || '-'}","${new Date(patient.createdAt).toLocaleDateString('id-ID')}",${activity?.consultationCount || 0},${activity?.activeDays?.length || 0}\n`;
+      const complaint = (patient.medicalHistory || '-').replace(/"/g, '""');
+      csv += `"${patient.name}","${patient.email}","${patient.phone || '-'}","${patient.ktp || '-'}","${new Date(patient.createdAt).toLocaleDateString('id-ID')}","${complaint}",${activity?.consultationCount || 0},${activity?.activeDays?.length || 0}\n`;
     });
 
     const blob = new Blob([csv], { type: 'text/csv' });
@@ -304,6 +418,9 @@ const PatientManagement = () => {
                       Tanggal Daftar
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-emerald-700 uppercase tracking-wider">
+                      Keluhan Terakhir
+                    </th>
+                    <th className="px-6 py-3 text-left text-xs font-medium text-emerald-700 uppercase tracking-wider">
                       Aktivitas
                     </th>
                     <th className="px-6 py-3 text-left text-xs font-medium text-emerald-700 uppercase tracking-wider">
@@ -352,6 +469,11 @@ const PatientManagement = () => {
                               month: 'short',
                               year: 'numeric'
                             })}
+                          </p>
+                        </td>
+                        <td className="px-6 py-4">
+                          <p className="text-sm text-emerald-800">
+                            {truncateText(patient.medicalHistory, 70)}
                           </p>
                         </td>
                         <td className="px-6 py-4 whitespace-nowrap">
@@ -471,6 +593,76 @@ const PatientManagement = () => {
                       })}
                     </p>
                   </div>
+                </div>
+
+                {/* Keluhan Pasien */}
+                <div>
+                  <h4 className="font-semibold text-gray-800 mb-3">Keluhan Pasien</h4>
+                  <div className="bg-gray-50 border border-gray-200 p-4 rounded-lg space-y-3">
+                    {complaintsLoading ? (
+                      <p className="text-sm text-gray-500">Memuat keluhan pasien...</p>
+                    ) : patientComplaints.length === 0 ? (
+                      <p className="text-sm text-gray-500">
+                        {selectedPatient.medicalHistory || 'Belum ada keluhan pasien yang tersimpan.'}
+                      </p>
+                    ) : (
+                      patientComplaints.map((item) => (
+                        <div key={item.id} className="bg-white border border-gray-200 rounded-lg px-3 py-2">
+                          <p className="text-sm text-gray-700">{item.complaint}</p>
+                          <p className="text-[11px] text-gray-400 mt-1">
+                            {new Date(item.complaintDate).toLocaleDateString('id-ID', {
+                              day: '2-digit',
+                              month: 'short',
+                              year: 'numeric',
+                            })}
+                          </p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+
+                  {canOperatePatientData && (
+                    <div className="mt-4 space-y-3">
+                      <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-sm font-medium text-gray-600 mb-1">
+                            Tanggal Keluhan
+                          </label>
+                          <input
+                            type="date"
+                            value={complaintForm.complaintDate}
+                            onChange={(e) => setComplaintForm((prev) => ({
+                              ...prev,
+                              complaintDate: e.target.value,
+                            }))}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                          />
+                        </div>
+                        <div className="md:col-span-2">
+                          <label className="block text-sm font-medium text-gray-600 mb-1">
+                            Keluhan Terbaru
+                          </label>
+                          <textarea
+                            value={complaintForm.complaint}
+                            onChange={(e) => setComplaintForm((prev) => ({
+                              ...prev,
+                              complaint: e.target.value,
+                            }))}
+                            className="w-full px-3 py-2 border border-slate-200 rounded-lg text-sm"
+                            rows={3}
+                            placeholder="Tuliskan keluhan pasien saat ini"
+                          />
+                        </div>
+                      </div>
+                      <button
+                        onClick={handleSaveComplaint}
+                        disabled={complaintSaving}
+                        className="bg-emerald-600 text-white px-4 py-2 rounded-lg hover:bg-emerald-700 transition-colors disabled:bg-gray-300 disabled:cursor-not-allowed"
+                      >
+                        {complaintSaving ? 'Menyimpan...' : 'Simpan Keluhan'}
+                      </button>
+                    </div>
+                  )}
                 </div>
 
                 {/* Activity Statistics */}

@@ -1,20 +1,120 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Layout from '../components/layout/Layout';
 import { FaFacebook, FaInstagram, FaYoutube } from 'react-icons/fa';
 import { FaXTwitter } from 'react-icons/fa6';
 import { sendContactEmail, isEmailServiceAvailable } from '../lib/emailService';
 import { Mail, Phone, MapPin, Send, Loader2, AlertTriangle, CheckCircle, XCircle } from 'lucide-react';
-import { publicInfo, publicLinks } from '../lib/publicInfo';
+import { formatPhoneDisplay, publicInfo, publicLinks } from '../lib/publicInfo';
 
 const Kontak = () => {
+  const turnstileSiteKey = (import.meta.env.VITE_TURNSTILE_SITE_KEY || '').trim();
   const [formData, setFormData] = useState({
     name: '',
     email: '',
     subject: '',
     message: ''
   });
+  const [emailServiceReady, setEmailServiceReady] = useState<boolean | null>(null);
+  const [captchaToken, setCaptchaToken] = useState('');
+  const [captchaReady, setCaptchaReady] = useState(false);
+  const [captchaWidgetId, setCaptchaWidgetId] = useState<string | number | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitStatus, setSubmitStatus] = useState<'success' | 'error' | null>(null);
+  const [submitError, setSubmitError] = useState('');
+  const captchaContainerRef = useRef<HTMLDivElement | null>(null);
+  const captchaRenderedRef = useRef(false);
+
+  useEffect(() => {
+    if (!turnstileSiteKey) {
+      return;
+    }
+
+    let mounted = true;
+
+    const renderCaptcha = () => {
+      const turnstile = (window as Window & {
+        turnstile?: {
+          render: (container: HTMLElement, options: Record<string, unknown>) => string | number;
+          reset: (widgetId?: string | number) => void;
+        };
+      }).turnstile;
+
+      if (!mounted || !turnstile || !captchaContainerRef.current || captchaRenderedRef.current) {
+        return;
+      }
+
+      const widgetId = turnstile.render(captchaContainerRef.current, {
+        sitekey: turnstileSiteKey,
+        theme: 'light',
+        callback: (token: string) => {
+          setCaptchaToken(token);
+          setSubmitError('');
+        },
+        'expired-callback': () => {
+          setCaptchaToken('');
+        },
+        'error-callback': () => {
+          setCaptchaToken('');
+        },
+      });
+
+      captchaRenderedRef.current = true;
+      setCaptchaWidgetId(widgetId);
+      setCaptchaReady(true);
+    };
+
+    const existingScript = document.getElementById('turnstile-script') as HTMLScriptElement | null;
+    if (existingScript) {
+      renderCaptcha();
+    } else {
+      const script = document.createElement('script');
+      script.id = 'turnstile-script';
+      script.src = 'https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit';
+      script.async = true;
+      script.defer = true;
+      script.onload = () => {
+        renderCaptcha();
+      };
+      document.head.appendChild(script);
+    }
+
+    return () => {
+      mounted = false;
+    };
+  }, [turnstileSiteKey]);
+
+  const resetCaptcha = () => {
+    if (!turnstileSiteKey) {
+      return;
+    }
+
+    const turnstile = (window as Window & {
+      turnstile?: {
+        reset: (widgetId?: string | number) => void;
+      };
+    }).turnstile;
+
+    if (turnstile && captchaWidgetId !== null) {
+      turnstile.reset(captchaWidgetId);
+    }
+    setCaptchaToken('');
+  };
+
+  useEffect(() => {
+    let active = true;
+
+    const checkEmailService = async () => {
+      const available = await isEmailServiceAvailable();
+      if (active) {
+        setEmailServiceReady(available);
+      }
+    };
+
+    void checkEmailService();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   const handleChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
     setFormData({
@@ -22,13 +122,32 @@ const Kontak = () => {
       [e.target.name]: e.target.value
     });
     setSubmitStatus(null);
+    setSubmitError('');
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (emailServiceReady === false) {
+      setSubmitStatus('error');
+      setSubmitError('Layanan email belum aktif. Gunakan telepon/email pada panel kontak di samping.');
+      return;
+    }
+
     if (!formData.name || !formData.email || !formData.subject || !formData.message) {
       alert('Semua field harus diisi!');
+      return;
+    }
+
+    if (!turnstileSiteKey) {
+      setSubmitStatus('error');
+      setSubmitError('CAPTCHA belum dikonfigurasi. Hubungi admin untuk mengaktifkan proteksi formulir kontak.');
+      return;
+    }
+
+    if (!captchaToken) {
+      setSubmitStatus('error');
+      setSubmitError('Silakan selesaikan verifikasi CAPTCHA terlebih dahulu.');
       return;
     }
 
@@ -40,24 +159,31 @@ const Kontak = () => {
 
     setIsSubmitting(true);
     setSubmitStatus(null);
+    setSubmitError('');
 
     try {
-      const emailSent = await sendContactEmail({
-        from_name: formData.name,
-        from_email: formData.email,
-        subject: formData.subject,
-        message: formData.message
+      const result = await sendContactEmail({
+        from_name: formData.name.trim(),
+        from_email: formData.email.trim(),
+        subject: formData.subject.trim(),
+        message: formData.message.trim(),
+        captcha_token: captchaToken,
       });
 
-      if (emailSent) {
+      if (result.success) {
         setSubmitStatus('success');
         setFormData({ name: '', email: '', subject: '', message: '' });
+        resetCaptcha();
       } else {
         setSubmitStatus('error');
+        setSubmitError(result.error || 'Gagal mengirim pesan. Silakan coba lagi.');
+        resetCaptcha();
       }
     } catch (error) {
       console.error('Error:', error);
       setSubmitStatus('error');
+      setSubmitError('Terjadi kendala saat mengirim pesan. Silakan coba beberapa saat lagi.');
+      resetCaptcha();
     } finally {
       setIsSubmitting(false);
     }
@@ -73,8 +199,8 @@ const Kontak = () => {
     {
       icon: Phone,
       label: 'Telepon',
-      value: publicInfo.phone || 'Belum dikonfigurasi',
-      href: publicLinks.phone || null,
+      value: formatPhoneDisplay(publicInfo.phone || publicInfo.whatsapp || '') || 'Belum dikonfigurasi',
+      href: publicLinks.phone || publicLinks.whatsapp || null,
     },
     {
       icon: MapPin,
@@ -89,7 +215,7 @@ const Kontak = () => {
     { icon: FaInstagram, label: 'Instagram', href: '#' },
     { icon: FaXTwitter, label: 'X', href: '#' },
     { icon: FaYoutube, label: 'YouTube', href: '#' }
-  ];
+  ].filter((item) => item.href && item.href !== '#');
 
   return (
     <Layout>
@@ -102,11 +228,11 @@ const Kontak = () => {
           </div>
 
           {/* Email Service Warning */}
-          {!isEmailServiceAvailable() && (
+          {emailServiceReady === false && (
             <div className="mb-6 flex items-start gap-3 p-3.5 bg-amber-50 border border-amber-200 rounded-xl max-w-2xl mx-auto">
               <AlertTriangle className="w-4 h-4 text-amber-500 flex-shrink-0 mt-0.5" />
               <p className="text-xs text-slate-500">
-                Email notification belum dikonfigurasi. Pesan akan tetap terkirim di form, tapi tidak akan dikirim ke email admin.
+                Layanan email belum dikonfigurasi, sehingga formulir sementara tidak bisa mengirim pesan ke admin.
                 Baca file <code className="bg-slate-100 px-1 rounded text-slate-600">SETUP_EMAIL.md</code> untuk setup.
               </p>
             </div>
@@ -120,6 +246,18 @@ const Kontak = () => {
               <div className="bg-white border border-slate-100 rounded-xl p-5 sm:p-7">
                 <h2 className="text-lg font-semibold text-slate-700 mb-1">Kirim Pesan</h2>
                 <p className="text-xs text-slate-400 mb-6">Isi formulir di bawah dan kami akan segera merespons</p>
+                <div className="mb-6 rounded-lg border border-emerald-100 bg-emerald-50 px-3.5 py-2.5">
+                  <p className="text-xs text-emerald-700">
+                    Estimasi respon admin: <span className="font-semibold">{publicInfo.contactResponseTime}</span>
+                  </p>
+                </div>
+                {!turnstileSiteKey && (
+                  <div className="mb-6 rounded-lg border border-amber-200 bg-amber-50 px-3.5 py-2.5">
+                    <p className="text-xs text-amber-700">
+                      CAPTCHA belum dikonfigurasi. Formulir kontak dinonaktifkan demi mencegah spam bot.
+                    </p>
+                  </div>
+                )}
 
                 {/* Status Messages */}
                 {submitStatus === 'success' && (
@@ -131,7 +269,7 @@ const Kontak = () => {
                 {submitStatus === 'error' && (
                   <div className="mb-5 flex items-start gap-2.5 p-3.5 bg-red-50 border border-red-100 rounded-xl">
                     <XCircle className="w-4 h-4 text-red-500 flex-shrink-0 mt-0.5" />
-                    <p className="text-xs text-red-700">Gagal mengirim pesan. Silakan coba lagi atau hubungi kami via WhatsApp.</p>
+                    <p className="text-xs text-red-700">{submitError || 'Gagal mengirim pesan. Silakan coba lagi atau hubungi kami via WhatsApp.'}</p>
                   </div>
                 )}
 
@@ -162,6 +300,7 @@ const Kontak = () => {
                         className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3.5 py-2.5 text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none focus:ring-2 focus:ring-emerald-400 focus:border-transparent"
                         placeholder="nama@email.com"
                       />
+                      <p className="mt-1 text-xs text-amber-700">Gunakan Email yang memiliki ruangan yang cukup Dan Tersinkronisasi untuk kelancaran Informasi! Jika anda buka email dan tidak ada balasan di "pesan masuk" coba cek di "spam".</p>
                     </div>
                   </div>
 
@@ -193,9 +332,19 @@ const Kontak = () => {
                     />
                   </div>
 
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1.5">Verifikasi Keamanan</label>
+                    <div className="min-h-[70px] rounded-lg border border-slate-200 bg-slate-50 p-2">
+                      <div ref={captchaContainerRef} />
+                      {turnstileSiteKey && !captchaReady && (
+                        <p className="mt-2 text-xs text-slate-500">Memuat CAPTCHA...</p>
+                      )}
+                    </div>
+                  </div>
+
                   <button
                     type="submit"
-                    disabled={isSubmitting}
+                    disabled={isSubmitting || emailServiceReady === false || !turnstileSiteKey || !captchaToken}
                     className="w-full flex items-center justify-center gap-2 bg-emerald-500 hover:bg-emerald-600 disabled:bg-slate-300 disabled:cursor-not-allowed text-white text-sm font-medium px-4 py-2.5 rounded-lg transition-colors"
                   >
                     {isSubmitting ? (
@@ -234,21 +383,23 @@ const Kontak = () => {
               </div>
 
               {/* Social Links */}
-              <div className="bg-white border border-slate-100 rounded-xl p-5 sm:p-6">
-                <h2 className="text-lg font-semibold text-slate-700 mb-4">Ikuti Kami</h2>
-                <div className="flex gap-3">
-                  {socialLinks.map((item) => (
-                    <a
-                      key={item.label}
-                      href={item.href}
-                      aria-label={item.label}
-                      className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400 hover:text-emerald-500 hover:border-emerald-200 hover:bg-emerald-50 transition-colors"
-                    >
-                      <item.icon size={18} />
-                    </a>
-                  ))}
+              {socialLinks.length > 0 && (
+                <div className="bg-white border border-slate-100 rounded-xl p-5 sm:p-6">
+                  <h2 className="text-lg font-semibold text-slate-700 mb-4">Ikuti Kami</h2>
+                  <div className="flex gap-3">
+                    {socialLinks.map((item) => (
+                      <a
+                        key={item.label}
+                        href={item.href}
+                        aria-label={item.label}
+                        className="w-10 h-10 rounded-lg bg-slate-50 border border-slate-100 flex items-center justify-center text-slate-400 hover:text-emerald-500 hover:border-emerald-200 hover:bg-emerald-50 transition-colors"
+                      >
+                        <item.icon size={18} />
+                      </a>
+                    ))}
+                  </div>
                 </div>
-              </div>
+              )}
             </div>
           </div>
         </div>
